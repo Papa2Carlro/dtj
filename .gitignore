@@ -1,0 +1,29 @@
+# Rust
+/target
+**/target
+Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.coverage
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+build/
+.npm/
+*.log
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
