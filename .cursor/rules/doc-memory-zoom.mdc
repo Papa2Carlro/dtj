@@ -1,0 +1,18 @@
+---
+description: Start Docs research with zoom 0 starter, then deepen
+globs:
+alwaysApply: false
+managed-by: doc-memory
+---
+# Doc-memory zoom habit
+
+When researching Docs/ or project behavior in this workspace:
+
+1. First turn: `doc_starter()` or resource `docs://context-pack-short` (zoom 0).
+2. Then `doc_session(task)` (preferred) or `doc_depth` / `doc_chain` — do not Read full canon files first.
+3. For roadmap/plan context: `roadmap_depth(path, level=1|2|3)`.
+4. For product dates: `milestone_list` / `milestone_create` (planning.sqlite).
+
+**Workspace pin:** project `.cursor/mcp.json` should set `DOC_MEMORY_WORKSPACE=${workspaceFolder}`.
+
+**Code review / audit prompts:** see always-on rule `code-review-via-mcp.mdc` — use MCP `audit_prompt_get` (not `dm` CLI).

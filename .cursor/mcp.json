@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "doc-memory": {
+      "command": "/Users/maksympryimak/.config/doc-hub/bin/dm",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "DOC_MEMORY_WORKSPACE": "${workspaceFolder}",
+        "DOC_ROOT": "Docs"
+      }
+    }
+  }
+}

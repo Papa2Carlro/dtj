@@ -1,0 +1,29 @@
+---
+description: Code review / audit prompts → doc-memory MCP (not CLI)
+alwaysApply: true
+managed-by: doc-memory
+---
+# Code review via doc-memory MCP
+
+When the user asks for **code review**, **CR**, **ревʼю**, **audit prompt**, **post-work audit**, or «спеціальна команда / промпт для ревʼю»:
+
+## Do this first (no clarifying round-trip)
+
+1. **Repo is already known** — this Cursor window’s workspace. MCP is pinned by `.cursor/mcp.json` (`DOC_MEMORY_WORKSPACE` = workspace folder). Do **not** ask which repo unless they named a different launcher alias.
+2. Use **doc-memory MCP only** (`user-doc-memory` / `doc-memory`). Do **not** start with shell `dm` / `doc-memory` CLI.
+3. Preferred flow:
+   - `task_list(status="code_review")` (or the status they named) — omit `workspace` so the pin applies.
+   - For each relevant task (or the `task_id` they gave): MCP tool **`audit_prompt_get`**.
+   - If screenshots matter: MCP **`attachment_list`**.
+   - Optional pack: `doc_session(task="code review …")`.
+4. Then run the review from the generated prompt (diff / attachments / status update).
+
+## Do not
+
+- Discover via `dm audit-prompt --help` or inventing shell loops as the primary path.
+- Ask «який репозиторій?» when the open workspace already matches the MCP pin.
+- Confuse `doc_audit` (docs link health) with **`audit_prompt_get`** (post-work CR prompt).
+
+## Multi-repo exception
+
+Only if they name another launcher alias (or the CR task clearly belongs elsewhere): `doc_list_repos` / `doc_use_repo` first, then the same MCP tools — still no CLI.

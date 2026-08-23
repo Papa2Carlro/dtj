@@ -1,0 +1,294 @@
+{
+  "adr-index.md": {
+    "path": "adr-index.md",
+    "title": "DTJ ADR Index",
+    "status": "",
+    "layer": "other",
+    "source_class": "documentation",
+    "source_role": "docs_tree",
+    "package_scope": null,
+    "authored": "human",
+    "canonicality": 1.0,
+    "workspace_rel": "adr-index.md",
+    "canonical_path": "adr-index.md",
+    "first_paragraph": "This repository contains all ADR documents for the independent DTJ project.",
+    "toc": [
+      {
+        "level": 1,
+        "title": "DTJ ADR Index"
+      },
+      {
+        "level": 2,
+        "title": "Active ADRs"
+      },
+      {
+        "level": 2,
+        "title": "Archived ADRs"
+      },
+      {
+        "level": 2,
+        "title": "How to Read ADRs"
+      },
+      {
+        "level": 2,
+        "title": "License"
+      }
+    ],
+    "must_lines": [],
+    "char_count": 718
+  },
+  "extraction.md": {
+    "path": "extraction.md",
+    "title": "DTJ Extraction — Migration Path from Doc Hub Ecosystem",
+    "status": "",
+    "layer": "other",
+    "source_class": "documentation",
+    "source_role": "docs_tree",
+    "package_scope": null,
+    "authored": "human",
+    "canonicality": 1.0,
+    "workspace_rel": "extraction.md",
+    "canonical_path": "extraction.md",
+    "first_paragraph": "This document maps the \"old path → new path → migration status → remaining dependency\" for all DTJ-related files and concepts moved from the Doc Hub ecosystem to the independent `/Users/maksympryimak/dtj` repository.",
+    "toc": [
+      {
+        "level": 1,
+        "title": "DTJ Extraction — Migration Path from Doc Hub Ecosystem"
+      },
+      {
+        "level": 2,
+        "title": "Purpose"
+      },
+      {
+        "level": 2,
+        "title": "Legend"
+      },
+      {
+        "level": 2,
+        "title": "1. Format Specification"
+      },
+      {
+        "level": 2,
+        "title": "2. Rust Reference Core"
+      },
+      {
+        "level": 2,
+        "title": "3. CLI Tools"
+      },
+      {
+        "level": 2,
+        "title": "4. Python MCP"
+      },
+      {
+        "level": 2,
+        "title": "5. VS Code Integration"
+      },
+      {
+        "level": 2,
+        "title": "6. Conformance Fixtures"
+      },
+      {
+        "level": 2,
+        "title": "7. Licensing"
+      },
+      {
+        "level": 2,
+        "title": "8. Ecosystem Compatibility Bridges (🔄 = Temporary)"
+      },
+      {
+        "level": 2,
+        "title": "9. Migration Rules (Ecosystem Side)"
+      },
+      {
+        "level": 2,
+        "title": "10. Roadmap Forward"
+      }
+    ],
+    "must_lines": [],
+    "char_count": 5986
+  },
+  "ext/pkg/dtj-vscode/README.md": {
+    "path": "ext/pkg/dtj-vscode/README.md",
+    "title": "DTJ VS Code Integration",
+    "status": "",
+    "layer": "process",
+    "source_class": "package_docs",
+    "source_role": "package_readme",
+    "package_scope": "dtj-vscode",
+    "authored": "human",
+    "canonicality": 0.85,
+    "workspace_rel": "packages/dtj-vscode/README.md",
+    "canonical_path": "packages/dtj-vscode/README.md",
+    "first_paragraph": "This is an optional integration for VS Code that provides .dtj file support — completely independent of Doc Hub paid packs.",
+    "toc": [
+      {
+        "level": 1,
+        "title": "DTJ VS Code Integration"
+      },
+      {
+        "level": 2,
+        "title": "Features"
+      },
+      {
+        "level": 2,
+        "title": "Build"
+      },
+      {
+        "level": 2,
+        "title": "Installation"
+      },
+      {
+        "level": 1,
+        "title": "From VS Code Extensions"
+      },
+      {
+        "level": 1,
+        "title": "Search for \"DTJ Session Explorer\" or install from VSIX"
+      },
+      {
+        "level": 1,
+        "title": "Or build from source"
+      },
+      {
+        "level": 2,
+        "title": "Independence Note"
+      },
+      {
+        "level": 2,
+        "title": "License"
+      }
+    ],
+    "must_lines": [],
+    "char_count": 1010
+  },
+  "ext/pkg/dtj/README.md": {
+    "path": "ext/pkg/dtj/README.md",
+    "title": "dtj — DTJ v1 reference core",
+    "status": "",
+    "layer": "process",
+    "source_class": "package_docs",
+    "source_role": "package_readme",
+    "package_scope": "dtj",
+    "authored": "human",
+    "canonicality": 0.85,
+    "workspace_rel": "crates/dtj/README.md",
+    "canonical_path": "crates/dtj/README.md",
+    "first_paragraph": "Language-neutral Rust reference for the Debug Trace Journal (`.dtj`) byte format.",
+    "toc": [
+      {
+        "level": 1,
+        "title": "dtj — DTJ v1 reference core"
+      },
+      {
+        "level": 2,
+        "title": "Build"
+      },
+      {
+        "level": 2,
+        "title": "CLI"
+      },
+      {
+        "level": 2,
+        "title": "License"
+      }
+    ],
+    "must_lines": [],
+    "char_count": 461
+  },
+  "ext/pkg/root/README.md": {
+    "path": "ext/pkg/root/README.md",
+    "title": "DTJ — Independent Debug Trace Journal",
+    "status": "",
+    "layer": "process",
+    "source_class": "package_docs",
+    "source_role": "root_readme",
+    "package_scope": "root",
+    "authored": "human",
+    "canonicality": 0.7,
+    "workspace_rel": "README.md",
+    "canonical_path": "README.md",
+    "first_paragraph": "DTJ (Debug Trace Journal) is an independent, open format for debug trace data. This repository provides the core specification, reference implementation, and conformance tools — completely standalone, with no dependency on Doc Hub, paid packs, or any commercial platform.",
+    "toc": [
+      {
+        "level": 1,
+        "title": "DTJ — Independent Debug Trace Journal"
+      },
+      {
+        "level": 2,
+        "title": "Overview"
+      },
+      {
+        "level": 2,
+        "title": "Status"
+      },
+      {
+        "level": 2,
+        "title": "Features (v1)"
+      },
+      {
+        "level": 2,
+        "title": "Non-features (v1 — no paid pack lock-in)"
+      },
+      {
+        "level": 2,
+        "title": "Quick Start"
+      },
+      {
+        "level": 1,
+        "title": "Read a .dtj session"
+      },
+      {
+        "level": 1,
+        "title": "Show last N events"
+      },
+      {
+        "level": 1,
+        "title": "Show session info"
+      },
+      {
+        "level": 1,
+        "title": "Verify integrity"
+      },
+      {
+        "level": 2,
+        "title": "Build from Source (Rust)"
+      },
+      {
+        "level": 2,
+        "title": "License"
+      },
+      {
+        "level": 2,
+        "title": "Communication"
+      }
+    ],
+    "must_lines": [],
+    "char_count": 1715
+  },
+  "ext/config/project-mcp-pin.md": {
+    "path": "ext/config/project-mcp-pin.md",
+    "title": "Config truth — project_mcp_pin",
+    "status": "",
+    "layer": "process",
+    "source_class": "config_truth",
+    "source_role": "project_mcp_pin",
+    "package_scope": null,
+    "authored": "human",
+    "canonicality": 0.9,
+    "workspace_rel": ".cursor/mcp.json",
+    "canonical_path": ".cursor/mcp.json",
+    "first_paragraph": "workspace_rel: `.cursor/mcp.json` source_class: `config_truth` source_role: `project_mcp_pin`",
+    "toc": [
+      {
+        "level": 1,
+        "title": "Config truth — project_mcp_pin"
+      },
+      {
+        "level": 2,
+        "title": "Doc Hub pin notes"
+      }
+    ],
+    "must_lines": [],
+    "char_count": 742
+  }
+}

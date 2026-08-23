@@ -1,0 +1,15 @@
+---
+description: Never add Cursor attribution trailers to git commits or PRs
+alwaysApply: true
+managed-by: doc-memory
+---
+# No Cursor commit attribution
+
+Never add any of the following to commits, commit messages, or PRs:
+
+- `Co-authored-by: Cursor`
+- `Co-authored-by: …cursor…`
+- `Made-with: Cursor`
+- `Made with Cursor`
+
+Commit author must remain the user's normal `git config user.name` / `user.email` only.
