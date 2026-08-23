@@ -1,0 +1,60 @@
+# DTJ Independent Project
+
+## License
+
+Unless otherwise noted, files in this repository are dual-licensed under:
+
+- MIT license (LICENSE-MIT)
+- Apache License 2.0 (LICENSE-APACHE)
+
+at your option.
+
+## Project Structure
+
+```
+dtj/
+  crates/dtj/          — Rust reference core
+  packages/dtj-mcp/    — Independent MCP tools
+  packages/dtj-vscode/ — VS Code integration (optional)
+  specs/               — DTJ v1 format specification
+  docs/                — ADR and decision documents
+  fixtures/            — Conformance tests and fixtures
+  schemas/             — JSON schemas for validation
+  README.md            — This file
+  LICENSE-MIT          — MIT license
+  LICENSE-APACHE       — Apache-2.0 license
+```
+
+## Getting Started
+
+```bash
+# Clone
+git clone https://github.com/dtj-standard/dtj.git
+cd dtj
+
+# Build core
+cargo build --release --package dtj
+
+# Run CLI
+./target/release/dtj --help
+
+# Run tests
+cargo test
+```
+
+## Independence Goals
+
+This project is intentionally decoupled from:
+- Doc Hub paid packs
+- Doc Hub extension manifests
+- Doc Hub-specific licensing
+- Doc Hub internal workflows
+- Commercial cloud telemetry
+- Any single-platform dependencies
+
+All components are designed to be:
+- Language-neutral where possible
+- Standalone buildable
+- Licensed under permissive Open Source licenses
+- Functionally complete for local-first debug trace use cases
+```

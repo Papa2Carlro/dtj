@@ -1,0 +1,29 @@
+[project]
+name = "dtj-mcp"
+version = "1.0.0"
+description = "Independent DTJ MCP read-only tools — no Doc Hub dependency"
+requires-python = ">=3.10"
+dependencies = [
+    "dtj = { path = \"../dtj\" }",
+    "mcp[cli]>=1.2.0,<2",
+    "starlette>=0.27.0",
+    "uvicorn[standard]>=0.23.0",
+]
+
+[project.scripts]
+dtj-mcp-info = "dtj_mcp.cli:info"
+dtj-mcp-list = "dtj_mcp.cli:list"
+dtj-mcp-read = "dtj_mcp.cli:read"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/"]
+
+[tool.hatch.build.targets.wheel.force-include]
+maksympryimak@MacBookPro doc-hub %
