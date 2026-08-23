@@ -1,11 +1,19 @@
 [package]
 name = "dtj"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2021"
+description = "DTJ v1 reference core — Debug Trace Journal byte format"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "dtj"
+path = "src/lib.rs"
 
 [[bin]]
 name = "dtj"
-path = "src/main.rs"
+path = "src/bin/dtj.rs"
 
 [dependencies]
-# No Doc Hub dependencies - standalone crate
+
+[dev-dependencies]
+tempfile = "3"
