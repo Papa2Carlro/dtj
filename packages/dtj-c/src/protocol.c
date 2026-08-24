@@ -1,4 +1,4 @@
-#include "dtj/dtj.h"
+#include "internal.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -145,18 +145,18 @@ int dtj_decode_hello_ok(const dtj_frame *frame, uint32_t *out_version) {
 }
 
 /* Encode OpenSession - allocates buffer, caller frees */
-uint8_t *dtj_encode_open_session(const dtj_open_session_meta *meta, size_t *out_len) {
-    if (!meta || !meta->file_name || !meta->producer_name || !meta->producer_version) return NULL;
+uint8_t *dtj_encode_open_session(const char *file_name, const char *producer_name, const char *producer_version, const uint8_t *session_id, uint32_t epoch_sec, size_t *out_len) {
+    if (!file_name || !producer_name || !producer_version || !session_id || !out_len) return NULL;
 
-    size_t fn_len = strlen(meta->file_name);
-    size_t pn_len = strlen(meta->producer_name);
-    size_t pv_len = strlen(meta->producer_version);
+    size_t fn_len = strlen(file_name);
+    size_t pn_len = strlen(producer_name);
+    size_t pv_len = strlen(producer_version);
 
     if (pn_len > 32 || pv_len > 16 || fn_len > UINT16_MAX) return NULL;
 
     size_t body_size = sizeof(uint16_t) + fn_len +
-                       sizeof(meta->session_id) +
-                       sizeof(int64_t) + sizeof(uint64_t) +
+                       sizeof(uint8_t) * 16 +
+                       sizeof(uint64_t) + sizeof(uint32_t) +
                        sizeof(uint16_t) + pn_len +
                        sizeof(uint16_t) + pv_len;
 
@@ -166,14 +166,14 @@ uint8_t *dtj_encode_open_session(const dtj_open_session_meta *meta, size_t *out_
     uint8_t *p = body;
 
     write_u16_le(p, (uint16_t)fn_len); p += 2;
-    memcpy(p, meta->file_name, fn_len); p += fn_len;
-    memcpy(p, meta->session_id, 16); p += 16;
-    write_u64_le(p, (uint64_t)meta->start_utc_unix_ms); p += 8;
-    write_u64_le(p, meta->mono_origin_ns); p += 8;
+    memcpy(p, file_name, fn_len); p += fn_len;
+    memcpy(p, session_id, 16); p += 16;
+    write_u64_le(p, (uint64_t)epoch_sec); p += 8;
+    write_u64_le(p, 0); p += 8;
     write_u16_le(p, (uint16_t)pn_len); p += 2;
-    memcpy(p, meta->producer_name, pn_len); p += pn_len;
+    memcpy(p, producer_name, pn_len); p += pn_len;
     write_u16_le(p, (uint16_t)pv_len); p += 2;
-    memcpy(p, meta->producer_version, pv_len);
+    memcpy(p, producer_version, pv_len);
 
     return dtj_encode_frame(DTJ_OP_OPEN_SESSION, body, body_size, out_len);
 }
@@ -201,7 +201,7 @@ uint8_t *dtj_encode_intern(uint8_t kind, const char *name, size_t *out_len) {
 }
 
 /* Decode InternOk */
-int dtj_decode_intern_ok(const dtj_frame *frame, uint32_t *out_dict_id) {
+int dtj_decode_intern_ok(const dtj_frame_internal *frame, uint32_t *out_dict_id) {
     if (!frame || frame->opcode != DTJ_OP_INTERN_OK || frame->body_len != sizeof(uint32_t)) return -1;
     *out_dict_id = read_u32_le(frame->body);
     return DTJ_OK;
@@ -242,7 +242,7 @@ uint8_t *dtj_encode_append_event(uint64_t monotonic_ns,
 }
 
 /* Decode AppendEventOk */
-int dtj_decode_append_event_ok(const dtj_frame *frame, uint64_t *out_sequence) {
+int dtj_decode_append_event_ok(const dtj_frame_internal *frame, uint64_t *out_sequence) {
     if (!frame || frame->opcode != DTJ_OP_APPEND_EVENT_OK || frame->body_len != sizeof(uint64_t)) return -1;
     *out_sequence = read_u64_le(frame->body);
     return DTJ_OK;

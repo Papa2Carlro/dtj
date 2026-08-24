@@ -25,7 +25,7 @@ typedef enum {
 /* Error structure */
 typedef struct {
     dtj_error_code code;
-    const char *message; /* valid until next call on same session or free */
+    char message[256]; /* fixed-size owned buffer */
 } dtj_error;
 
 /* Severity levels (match Rust dtj::Severity) */
@@ -157,34 +157,6 @@ static inline dtj_value dtj_make_bytes(const uint8_t *data, uint32_t len) {
     val.u.bytes_val.len = len;
     return val;
 }
-
-/* OpenSession metadata structure */
-typedef struct {
-    const char *file_name;
-    uint8_t session_id[16];
-    int64_t start_utc_unix_ms;
-    uint64_t mono_origin_ns;
-    const char *producer_name;
-    const char *producer_version;
-} dtj_open_session_meta;
-
-/* Protocol encoding/decoding functions (for internal use) */
-uint8_t *dtj_encode_open_session(const dtj_open_session_meta *meta, size_t *out_len);
-uint8_t *dtj_encode_intern(uint8_t kind, const char *name, size_t *out_len);
-uint8_t *dtj_encode_append_event(uint64_t monotonic_ns,
-                                  uint32_t domain_id,
-                                  uint32_t category_id,
-                                  uint32_t event_name_id,
-                                  uint32_t correlation_id,
-                                  uint8_t severity,
-                                  uint32_t field_name_id,
-                                  uint8_t type_tag,
-                                  const uint8_t *value_body,
-                                  size_t value_body_len,
-                                  size_t *out_len);
-uint8_t *dtj_encode_finish_session(size_t *out_len);
-uint8_t *dtj_encode_ping(size_t *out_len);
-int dtj_generate_session_id(uint8_t out[16]);
 
 /* Error initialization function */
 void dtj_error_init(dtj_error *err, dtj_error_code code, const char *msg);

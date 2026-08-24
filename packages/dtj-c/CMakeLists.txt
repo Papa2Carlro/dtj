@@ -5,15 +5,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-# Compiler flags
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic -fPIC")
-
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0 -fsanitize=address -fno-omit-frame-pointer")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
-elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -DNDEBUG")
-endif()
+# Compiler flags - will apply after targets defined
 
 # Source files
 set(DTJ_SOURCES
@@ -36,6 +28,14 @@ set_target_properties(dtj PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
 )
+target_compile_options(dtj PRIVATE -Wall -Wextra -Wpedantic -fPIC)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(dtj PRIVATE -g -O0 -fsanitize=address -fno-omit-frame-pointer)
+    target_link_options(dtj PRIVATE -fsanitize=address)
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_options(dtj PRIVATE -O3 -DNDEBUG)
+endif()
 
 # Install targets
 install(TARGETS dtj
@@ -52,6 +52,7 @@ enable_testing()
 add_executable(dtj_tests tests/protocol_tests.c tests/client_tests.c)
 target_link_libraries(dtj_tests dtj)
 target_include_directories(dtj_tests PRIVATE include)
+target_compile_options(dtj_tests PRIVATE -Wall -Wextra -Wpedantic)
 
 add_test(NAME dtj_unit_tests COMMAND dtj_tests)
 
@@ -59,6 +60,7 @@ add_test(NAME dtj_unit_tests COMMAND dtj_tests)
 add_executable(dtj_e2e tests/e2e_tests.c)
 target_link_libraries(dtj_e2e dtj)
 target_include_directories(dtj_e2e PRIVATE include)
+target_compile_options(dtj_e2e PRIVATE -Wall -Wextra -Wpedantic)
 
 # Only run E2E if DTJ_RUN_AGENT_E2E=1 is set via ctest --extra-args or environment
 
