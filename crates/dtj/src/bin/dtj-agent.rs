@@ -199,54 +199,184 @@ fn handle_client(mut stream: UnixStream, data_dir: &Path) -> io::Result<()> {
                 }
             }
 
-            // OpenSession { header: 128 bytes, file_name: UTF-8 NUL-terminated }
+            // OpenSession { metadata only; agent constructs FileHeader }
             c if c == Cmd::OpenSession as u8 => {
                 if !st.hello_done {
                     write_frame(&mut stream, Resp::Error as u8, b"Hello required first")?;
                     continue;
                 }
-                if body.len() < 128 {
-                    write_frame(&mut stream, Resp::Error as u8, b"header too short")?;
+                // Parse metadata body:
+                // file_name_len (u16 LE), file_name (UTF-8)
+                // session_id (16 bytes)
+                // start_utc_unix_ms (i64 LE), mono_origin_ns (u64 LE)
+                // producer_name_len (u16 LE), producer_name (UTF-8)
+                // producer_version_len (u16 LE), producer_version (UTF-8)
+                let mut off = 0;
+                if body.len() < 2 {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: missing file_name_len",
+                    )?;
                     continue;
                 }
-                let header_bytes: [u8; 128] = body[..128].try_into().unwrap();
-                let header = match FileHeader::decode(&header_bytes) {
+                let file_name_len = u16::from_le_bytes([body[off], body[off + 1]]) as usize;
+                off += 2;
+                if body.len() < off + file_name_len {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: file_name truncated",
+                    )?;
+                    continue;
+                }
+                let file_name = match std::str::from_utf8(&body[off..off + file_name_len]) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        write_frame(
+                            &mut stream,
+                            Resp::Error as u8,
+                            b"OpenSession: file_name not valid UTF-8",
+                        )?;
+                        continue;
+                    }
+                };
+                off += file_name_len;
+                // Reject NUL, empty, path separators, traversal, absolute
+                if file_name.contains('\0')
+                    || file_name.is_empty()
+                    || file_name.contains('/')
+                    || file_name.contains('\\')
+                    || file_name.contains("..")
+                    || Path::new(file_name).is_absolute()
+                {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: invalid file name",
+                    )?;
+                    continue;
+                }
+                // session_id: 16 bytes
+                if body.len() < off + 16 {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: session_id truncated",
+                    )?;
+                    continue;
+                }
+                let mut session_id = [0u8; 16];
+                session_id.copy_from_slice(&body[off..off + 16]);
+                off += 16;
+                // start_utc_unix_ms (i64 LE), mono_origin_ns (u64 LE)
+                if body.len() < off + 8 + 8 {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: timestamps truncated",
+                    )?;
+                    continue;
+                }
+                let start_utc_unix_ms = i64::from_le_bytes(body[off..off + 8].try_into().unwrap());
+                off += 8;
+                let mono_origin_ns = u64::from_le_bytes(body[off..off + 8].try_into().unwrap());
+                off += 8;
+                // producer_name_len (u16 LE), producer_name (UTF-8)
+                if body.len() < off + 2 {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: missing producer_name_len",
+                    )?;
+                    continue;
+                }
+                let producer_name_len = u16::from_le_bytes([body[off], body[off + 1]]) as usize;
+                off += 2;
+                if body.len() < off + producer_name_len {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: producer_name truncated",
+                    )?;
+                    continue;
+                }
+                let producer_name = match std::str::from_utf8(&body[off..off + producer_name_len]) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        write_frame(
+                            &mut stream,
+                            Resp::Error as u8,
+                            b"OpenSession: producer_name not valid UTF-8",
+                        )?;
+                        continue;
+                    }
+                };
+                off += producer_name_len;
+                // producer_version_len (u16 LE), producer_version (UTF-8)
+                if body.len() < off + 2 {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: missing producer_version_len",
+                    )?;
+                    continue;
+                }
+                let producer_version_len = u16::from_le_bytes([body[off], body[off + 1]]) as usize;
+                off += 2;
+                if body.len() < off + producer_version_len {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: producer_version truncated",
+                    )?;
+                    continue;
+                }
+                let producer_version =
+                    match std::str::from_utf8(&body[off..off + producer_version_len]) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            write_frame(
+                                &mut stream,
+                                Resp::Error as u8,
+                                b"OpenSession: producer_version not valid UTF-8",
+                            )?;
+                            continue;
+                        }
+                    };
+                // Validate producer_name and producer_version lengths against core limits
+                if producer_name.len() > 32 {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: producer_name longer than 32 bytes",
+                    )?;
+                    continue;
+                }
+                if producer_version.len() > 16 {
+                    write_frame(
+                        &mut stream,
+                        Resp::Error as u8,
+                        b"OpenSession: producer_version longer than 16 bytes",
+                    )?;
+                    continue;
+                }
+                // Construct FileHeader via core API
+                let header = match FileHeader::new(
+                    session_id,
+                    start_utc_unix_ms,
+                    mono_origin_ns,
+                    producer_name,
+                    producer_version,
+                ) {
                     Ok(h) => h,
                     Err(e) => {
-                        let msg = format!("invalid header: {:?}", e);
+                        let msg = format!("OpenSession: invalid header: {:?}", e);
                         write_frame(&mut stream, Resp::Error as u8, msg.as_bytes())?;
                         continue;
                     }
                 };
-                // file name after header, NUL-terminated
-                let name_bytes = &body[128..];
-                let name_str = match std::str::from_utf8(name_bytes) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        write_frame(&mut stream, Resp::Error as u8, b"file name not valid UTF-8")?;
-                        continue;
-                    }
-                };
-                // Optional trailing NUL can be stripped (protocol: NUL-terminated optional)
-                let name_str = name_str.trim_end_matches('\0');
-                // Reject NUL anywhere in the filename (after stripping terminator)
-                if name_str.contains('\0') {
-                    write_frame(&mut stream, Resp::Error as u8, b"file name contains NUL")?;
-                    continue;
-                }
-                if name_str.is_empty() {
-                    write_frame(&mut stream, Resp::Error as u8, b"empty file name")?;
-                    continue;
-                }
-                if name_str.contains('/')
-                    || name_str.contains('\\')
-                    || name_str.contains("..")
-                    || Path::new(name_str).is_absolute()
-                {
-                    write_frame(&mut stream, Resp::Error as u8, b"invalid file name")?;
-                    continue;
-                }
-                let data_path = data_dir.join(name_str);
+                let data_path = data_dir.join(file_name);
                 if let Err(e) = fs::create_dir_all(data_dir) {
                     let msg = format!("cannot create data dir: {:?}", e);
                     let _ = write_frame(&mut stream, Resp::Error as u8, msg.as_bytes());

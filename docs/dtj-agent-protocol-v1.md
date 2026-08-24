@@ -18,7 +18,7 @@ The agent is the **sole writer** of `.dtj` files; clients never serialize DTJ by
 |-----------|------|--------|---------|
 | C→S | Hello | 0x01 | `protocol_version` (u32 LE) |
 | S→C | HelloOk | 0x81 | `protocol_version` (u32 LE) |
-| C→S | OpenSession | 0x02 | 128‑byte `FileHeader` + UTF‑8 file name (NUL‑terminated optional) |
+| C→S | OpenSession | 0x02 | Metadata (see below) |
 | S→C | OpenSessionOk | 0x82 | empty |
 | C→S | Intern | 0x06 | `dict_kind` (u8) + `name_len` (u16 LE) + `name` (UTF‑8 bytes) |
 | S→C | InternOk | 0x86 | `dictionary_id` (u32 LE) |
@@ -38,11 +38,25 @@ name              UTF‑8 bytes (name_len bytes, max 1024, no NUL inside)
 ```
 
 ## OpenSession Payload
+The client sends high-level metadata; the agent constructs the `FileHeader` and exclusively owns the `SessionWriter`. The client never serializes DTJ file headers or `.dtj` bytes.
+
 ```
-FileHeader        128 bytes (exact)
-file_name         UTF‑8, NUL‑terminated optional
+file_name_len        u16 LE
+file_name            UTF-8 bytes (no NUL, no path separators, no `..`, not absolute, not empty)
+
+session_id           u8[16] (opaque, passed through to FileHeader)
+
+start_utc_unix_ms    i64 LE
+mono_origin_ns       u64 LE
+
+producer_name_len    u16 LE
+producer_name        UTF-8 bytes (max 32 bytes)
+
+producer_version_len u16 LE
+producer_version     UTF-8 bytes (max 16 bytes)
 ```
-The agent is started with `--data-dir <dir>` which defines the root directory for session files. The `file_name` in OpenSession is a simple file name (no path separators, no `..`, not absolute). The agent writes the session file to `<data-dir>/<file_name>`.
+
+The agent validates all fields against core limits (producer_name ≤ 32 bytes, producer_version ≤ 16 bytes, file_name restrictions) and returns an `Error` frame for any violation.
 
 ## AppendEvent Payload (MVP)
 ```
@@ -80,8 +94,8 @@ field:
 1. Client connects.
 2. Client sends **Hello** with desired protocol version.
 3. Server replies **HelloOk** (same version) or **Error** (unsupported).
-4. Client sends **OpenSession** with a 128‑byte `FileHeader` and file name.
-5. Server creates `SessionWriter` and replies **OpenSessionOk**.
+4. Client sends **OpenSession** with metadata (file_name, session_id, timestamps, producer_name, producer_version).
+5. Server validates metadata, constructs `FileHeader`, creates `SessionWriter`, and replies **OpenSessionOk**.
 6. Zero or more **Intern** / **InternOk** exchanges to populate dictionary.
 7. Zero or more **AppendEvent** / **AppendEventOk** exchanges.
 8. Client sends **FinishSession**, server flushes and replies **FinishSessionOk**.
