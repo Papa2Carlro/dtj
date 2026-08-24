@@ -3,43 +3,31 @@
 This directory contains conformance tests and fixtures for the DTJ v1 byte format.
 All tests are standalone — no Doc Hub dependencies.
 
-## Directory Structure
+## What Exists
 
-```
-fixtures/
-  positive/
-    - session_with_dictionary.dtj
-    - session_with_events.dtj
-    - session_v1_format.dtj
-  negative/
-    - session_corrupted_header.dtj
-    - session_unknown_chunk_type.dtj
-    - session_exceeds_payload_limit.dtj
-    - session_wrong_magic.dtj
+**Canonical binary fixture:**
+- `crates/dtj/tests/fixtures/minimal_session.dtj` — minimal valid DTJ v1 session
 
-schemas/
-  dtj-format-v1.json  — JSON schema for validation
-  chunk-header.schema.json
-  file-header.schema.json
+**Negative coverage:**
+- Binary negative fixtures (corrupted header, unknown chunk type, etc.) are **not yet ported** to this repository.
+- Current negative coverage is generated programmatically by conformance tests in `crates/dtj/tests/conformance.rs` (21 tests covering checksum mismatch, sequence gaps, unknown dictionary IDs, malformed records, oversized payloads, torn chunks, etc.).
 
-tests/
-  test_read_write.rs
-  test_chunk_integrity.rs
-  test_version_handling.rs
-  test_dictionary.rs
-```
+**Test files (in `crates/dtj/tests/`):**
+- `cli_read_session.rs` — 2 CLI integration tests
+- `conformance.rs` — 21 conformance tests (positive + negative)
 
 ## Running Tests
 
 ```bash
-# Rust tests
-cargo test --package dtj
+# From crates/dtj directory
+cd crates/dtj
+cargo test
 
 # Or specific test suites
-cargo test test_read_write
-cargo test test_chunk_integrity
+cargo test cli_read_session
+cargo test conformance
 ```
 
 ## License
 
-MIT OR Apache-2.0
+Unresolved — see `OPEN_DECISIONS.md`

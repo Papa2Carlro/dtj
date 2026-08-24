@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "dtj"
 path = "src/bin/dtj.rs"
 
+[[bin]]
+name = "dtj-agent"
+path = "src/bin/dtj-agent.rs"
+
 [dependencies]
 
 [dev-dependencies]

@@ -120,7 +120,7 @@ fn encode_value(value: &Value) -> Result<(u8, Vec<u8>)> {
 fn decode_value(tag: u8, buf: &[u8]) -> Result<(Value, usize)> {
     Ok(match tag {
         TYPE_BOOL => {
-            if buf.len() < 1 {
+            if buf.is_empty() {
                 return Err(Error::MalformedRecord("bool value truncated".into()));
             }
             (Value::Bool(buf[0] != 0), 1)

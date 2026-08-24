@@ -9,21 +9,20 @@ paid packs, or any commercial platform.
 
 ## Status
 
-**v1.0.0** — Initial release with core byte format, CLI, and conformance fixtures.
+**Phase 0** — Rust core with `dtj read-session` CLI, 25 passing tests, canonical `minimal_session.dtj` fixture.
 
-## Features (v1)
+## Features (Phase 0)
 
-- Append-only binary journal format
+- Append-only binary journal format (DTJ v1 byte contract)
 - Versioned committed chunks with crash recovery
 - Numeric string dictionary
 - Typed inline event payloads
 - Lossless session policy or flight-recorder overwrite mode
 - Rebuildable indexes (not source of truth)
 - Language-neutral: readable from Rust, C#, Python, TypeScript
-- CLI: `dtj read-session`, `dtj tail`, `dtj info`, `dtj verify`
-- MCP read-only boundary: stdio-based session analysis
+- CLI: `dtj read-session` (JSON output, structured errors)
 
-## Non-features (v1 — no paid pack lock-in)
+## Non-features (Phase 0 — no paid pack lock-in)
 
 - No remote transport, HTTP, or cloud telemetry
 - No compression, encryption, or replay
@@ -31,21 +30,15 @@ paid packs, or any commercial platform.
 - No JSONL import/export
 - No paid licensing or activation requirements
 - No Doc Hub-specific branding or manifests
+- No `dtj tail`, `dtj info`, `dtj verify` commands
+- No MCP implementation (planned, not yet built)
+- No SDKs (C#, Python, TypeScript — planned, not yet built)
 
 ## Quick Start
 
 ```bash
 # Read a .dtj session
 dtj read-session path/to/session.dtj
-
-# Show last N events
-dtj tail path/to/session.dtj 10
-
-# Show session info
-dtj info path/to/session.dtj
-
-# Verify integrity
-dtj verify path/to/session.dtj
 ```
 
 ## Build from Source (Rust)
@@ -58,7 +51,7 @@ cargo build --release
 
 ## License
 
-MIT OR Apache-2.0
+Unresolved — see `OPEN_DECISIONS.md`
 
 ## Communication
 

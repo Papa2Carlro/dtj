@@ -24,4 +24,4 @@ cargo build --bin dtj
 
 ## License
 
-MIT OR Apache-2.0
+Unresolved — see `OPEN_DECISIONS.md`

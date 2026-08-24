@@ -1,4 +1,4 @@
-use dtj::{AppendEvent, DictKind, FileHeader, SessionWriter, Severity, TypedPayload, Value};
+use dtj::{AppendEvent, FileHeader, SessionWriter, Severity, TypedPayload, Value};
 
 fn session_id() -> [u8; 16] {
     *b"fixture-session\0"
