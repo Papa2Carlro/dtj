@@ -1,0 +1,14 @@
+# Generated artifacts
+node_modules/
+dist/
+dist-test/
+*.log
+*.tsbuildinfo
+
+# Temporary socket files
+dtj-agent-*/
+*.sock
+
+# Coverage
+coverage/
+.nyc_output/
