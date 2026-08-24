@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+*.so
+*.dylib
+*.dll
+*.a
+
+# Test executables
+cpp_wrapper_tests
+cpp_e2e_tests
+
+# Temporary files
+*.tmp
+*.swp
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-*
