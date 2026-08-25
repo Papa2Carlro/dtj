@@ -463,164 +463,164 @@ fn agent_path_traversal() {
     assert!(status.success());
     // Ensure no file created outside data_dir
     assert!(!std::path::Path::new("../evil.dtj").exists());
-  }
+}
 
-  #[test]
-  fn agent_malformed_opensession_metadata() {
-      let sock_dir = tempfile::tempdir().unwrap();
-      let sock_path = sock_dir.path().join("agent.sock");
-      let sock_str = sock_path.to_str().unwrap();
-      let data_dir = tempfile::tempdir().unwrap();
-      let data_dir_str = data_dir.path().to_str().unwrap();
+#[test]
+fn agent_malformed_opensession_metadata() {
+    let sock_dir = tempfile::tempdir().unwrap();
+    let sock_path = sock_dir.path().join("agent.sock");
+    let sock_str = sock_path.to_str().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let data_dir_str = data_dir.path().to_str().unwrap();
 
-      let agent_bin = std::env::var("CARGO_BIN_EXE_dtj-agent").unwrap();
-      let child = Command::new(agent_bin)
-          .arg("--socket")
-          .arg(sock_str)
-          .arg("--data-dir")
-          .arg(data_dir_str)
-          .stdin(Stdio::null())
-          .stdout(Stdio::inherit())
-          .stderr(Stdio::inherit())
-          .spawn()
-          .unwrap();
-      let mut _guard = ChildGuard { child: Some(child) };
+    let agent_bin = std::env::var("CARGO_BIN_EXE_dtj-agent").unwrap();
+    let child = Command::new(agent_bin)
+        .arg("--socket")
+        .arg(sock_str)
+        .arg("--data-dir")
+        .arg(data_dir_str)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut _guard = ChildGuard { child: Some(child) };
 
-      let mut stream = connect_with_retry(sock_str, Duration::from_secs(2));
-      // Hello
-      write_frame(&mut stream, 0x01, &PROTOCOL_VERSION.to_le_bytes()).unwrap();
-      expect_response(&mut stream, 0x81);
+    let mut stream = connect_with_retry(sock_str, Duration::from_secs(2));
+    // Hello
+    write_frame(&mut stream, 0x01, &PROTOCOL_VERSION.to_le_bytes()).unwrap();
+    expect_response(&mut stream, 0x81);
 
-      // Test 1: Invalid UTF-8 in file_name
-      {
-          let session_id = [0x01; 16];
-          let start_utc_unix_ms = 1722470400000i64;
-          let mono_origin_ns = 0u64;
-          let producer_name = b"test-prod";
-          let producer_version = b"1.0.0";
-          // Invalid UTF-8 sequence
-          let file_name = b"session\xff.dtj";
+    // Test 1: Invalid UTF-8 in file_name
+    {
+        let session_id = [0x01; 16];
+        let start_utc_unix_ms = 1722470400000i64;
+        let mono_origin_ns = 0u64;
+        let producer_name = b"test-prod";
+        let producer_version = b"1.0.0";
+        // Invalid UTF-8 sequence
+        let file_name = b"session\xff.dtj";
 
-          let mut open_body = Vec::new();
-          open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(file_name);
-          open_body.extend_from_slice(&session_id);
-          open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
-          open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
-          open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_name);
-          open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_version);
+        let mut open_body = Vec::new();
+        open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(file_name);
+        open_body.extend_from_slice(&session_id);
+        open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
+        open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
+        open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_name);
+        open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_version);
 
-          write_frame(&mut stream, 0x02, &open_body).unwrap();
-          let frame = read_frame(&mut stream).unwrap().unwrap();
-          assert_eq!(frame[0], 0xFF); // Error
-      }
+        write_frame(&mut stream, 0x02, &open_body).unwrap();
+        let frame = read_frame(&mut stream).unwrap().unwrap();
+        assert_eq!(frame[0], 0xFF); // Error
+    }
 
-      // Test 2: file_name_len doesn't match actual bytes (truncated)
-      {
-          let session_id = [0x01; 16];
-          let start_utc_unix_ms = 1722470400000i64;
-          let mono_origin_ns = 0u64;
-          let producer_name = b"test-prod";
-          let producer_version = b"1.0.0";
-          let file_name = b"session.dtj";
+    // Test 2: file_name_len doesn't match actual bytes (truncated)
+    {
+        let session_id = [0x01; 16];
+        let start_utc_unix_ms = 1722470400000i64;
+        let mono_origin_ns = 0u64;
+        let producer_name = b"test-prod";
+        let producer_version = b"1.0.0";
+        let file_name = b"session.dtj";
 
-          let mut open_body = Vec::new();
-          // Claim length is 100 but actual is shorter
-          open_body.extend_from_slice(&100u16.to_le_bytes());
-          open_body.extend_from_slice(file_name);
-          open_body.extend_from_slice(&session_id);
-          open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
-          open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
-          open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_name);
-          open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_version);
+        let mut open_body = Vec::new();
+        // Claim length is 100 but actual is shorter
+        open_body.extend_from_slice(&100u16.to_le_bytes());
+        open_body.extend_from_slice(file_name);
+        open_body.extend_from_slice(&session_id);
+        open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
+        open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
+        open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_name);
+        open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_version);
 
-          write_frame(&mut stream, 0x02, &open_body).unwrap();
-          let frame = read_frame(&mut stream).unwrap().unwrap();
-          assert_eq!(frame[0], 0xFF); // Error
-      }
+        write_frame(&mut stream, 0x02, &open_body).unwrap();
+        let frame = read_frame(&mut stream).unwrap().unwrap();
+        assert_eq!(frame[0], 0xFF); // Error
+    }
 
-      // Test 3: Invalid UTF-8 in producer_name
-      {
-          let session_id = [0x01; 16];
-          let start_utc_unix_ms = 1722470400000i64;
-          let mono_origin_ns = 0u64;
-          // Invalid UTF-8 sequence
-          let producer_name = b"test\xffprod";
-          let producer_version = b"1.0.0";
-          let file_name = b"session.dtj";
+    // Test 3: Invalid UTF-8 in producer_name
+    {
+        let session_id = [0x01; 16];
+        let start_utc_unix_ms = 1722470400000i64;
+        let mono_origin_ns = 0u64;
+        // Invalid UTF-8 sequence
+        let producer_name = b"test\xffprod";
+        let producer_version = b"1.0.0";
+        let file_name = b"session.dtj";
 
-          let mut open_body = Vec::new();
-          open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(file_name);
-          open_body.extend_from_slice(&session_id);
-          open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
-          open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
-          open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_name);
-          open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_version);
+        let mut open_body = Vec::new();
+        open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(file_name);
+        open_body.extend_from_slice(&session_id);
+        open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
+        open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
+        open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_name);
+        open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_version);
 
-          write_frame(&mut stream, 0x02, &open_body).unwrap();
-          let frame = read_frame(&mut stream).unwrap().unwrap();
-          assert_eq!(frame[0], 0xFF); // Error
-      }
+        write_frame(&mut stream, 0x02, &open_body).unwrap();
+        let frame = read_frame(&mut stream).unwrap().unwrap();
+        assert_eq!(frame[0], 0xFF); // Error
+    }
 
-      // Test 4: producer_name too long (>32 bytes)
-      {
-          let session_id = [0x01; 16];
-          let start_utc_unix_ms = 1722470400000i64;
-          let mono_origin_ns = 0u64;
-          let producer_name = b"this-producer-name-is-way-too-long-for-the-limit";
-          let producer_version = b"1.0.0";
-          let file_name = b"session.dtj";
+    // Test 4: producer_name too long (>32 bytes)
+    {
+        let session_id = [0x01; 16];
+        let start_utc_unix_ms = 1722470400000i64;
+        let mono_origin_ns = 0u64;
+        let producer_name = b"this-producer-name-is-way-too-long-for-the-limit";
+        let producer_version = b"1.0.0";
+        let file_name = b"session.dtj";
 
-          let mut open_body = Vec::new();
-          open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(file_name);
-          open_body.extend_from_slice(&session_id);
-          open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
-          open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
-          open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_name);
-          open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_version);
+        let mut open_body = Vec::new();
+        open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(file_name);
+        open_body.extend_from_slice(&session_id);
+        open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
+        open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
+        open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_name);
+        open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_version);
 
-          write_frame(&mut stream, 0x02, &open_body).unwrap();
-          let frame = read_frame(&mut stream).unwrap().unwrap();
-          assert_eq!(frame[0], 0xFF); // Error
-      }
+        write_frame(&mut stream, 0x02, &open_body).unwrap();
+        let frame = read_frame(&mut stream).unwrap().unwrap();
+        assert_eq!(frame[0], 0xFF); // Error
+    }
 
-      // Test 5: producer_version too long (>16 bytes)
-      {
-          let session_id = [0x01; 16];
-          let start_utc_unix_ms = 1722470400000i64;
-          let mono_origin_ns = 0u64;
-          let producer_name = b"test-prod";
-          let producer_version = b"this-version-is-way-too-long";
-          let file_name = b"session.dtj";
+    // Test 5: producer_version too long (>16 bytes)
+    {
+        let session_id = [0x01; 16];
+        let start_utc_unix_ms = 1722470400000i64;
+        let mono_origin_ns = 0u64;
+        let producer_name = b"test-prod";
+        let producer_version = b"this-version-is-way-too-long";
+        let file_name = b"session.dtj";
 
-          let mut open_body = Vec::new();
-          open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(file_name);
-          open_body.extend_from_slice(&session_id);
-          open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
-          open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
-          open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_name);
-          open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
-          open_body.extend_from_slice(producer_version);
+        let mut open_body = Vec::new();
+        open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(file_name);
+        open_body.extend_from_slice(&session_id);
+        open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
+        open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
+        open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_name);
+        open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
+        open_body.extend_from_slice(producer_version);
 
-          write_frame(&mut stream, 0x02, &open_body).unwrap();
-          let frame = read_frame(&mut stream).unwrap().unwrap();
-          assert_eq!(frame[0], 0xFF); // Error
-      }
+        write_frame(&mut stream, 0x02, &open_body).unwrap();
+        let frame = read_frame(&mut stream).unwrap().unwrap();
+        assert_eq!(frame[0], 0xFF); // Error
+    }
 
-      drop(stream);
-      let mut child = _guard.child.take().unwrap();
-      let status = child.wait().unwrap();
-      assert!(status.success());
-  }
+    drop(stream);
+    let mut child = _guard.child.take().unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success());
+}

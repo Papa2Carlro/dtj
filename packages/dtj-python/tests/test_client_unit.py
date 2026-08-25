@@ -228,7 +228,14 @@ class TestSeverityMapping(unittest.TestCase):
     """Test severity string to value mapping."""
     
     def test_all_severities_mapped(self):
-        expected = {"debug": 0, "info": 1, "warn": 2, "error": 3, "fatal": 4}
+        expected = {
+            "trace": 0,
+            "debug": 1,
+            "info": 2,
+            "warn": 3,
+            "error": 4,
+            "fatal": 5,
+        }
         self.assertEqual(SEVERITY_MAP, expected)
 
 

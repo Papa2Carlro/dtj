@@ -33,6 +33,16 @@ pip install -e /path/to/dtj/packages/dtj-python
 pip install -e packages/dtj-python
 ```
 
+### Development install of dtj-agent
+
+During development `dtj` and `dtj-agent` are installed via Cargo:
+
+```bash
+cargo install --path crates/dtj --bin dtj --bin dtj-agent
+```
+
+This places binaries in `~/.cargo/bin`. macOS GUI apps like Blender may not inherit shell PATH, so the SDK falls back to `~/.cargo/bin/dtj-agent`.
+
 ## Quick Start
 
 ```python
@@ -61,8 +71,14 @@ The SDK locates `dtj-agent` in this order:
 1. `agent_path` in `TraceConfig`
 2. `DTJ_AGENT_PATH` environment variable
 3. `shutil.which("dtj-agent")` (PATH lookup)
+4. macOS Homebrew fallback: `/opt/homebrew/bin/dtj-agent`, then `/usr/local/bin/dtj-agent`
+5. Cargo dev install fallback: `~/.cargo/bin/dtj-agent`
 
 If not found, the SDK emits a single `RuntimeWarning` and enters **disabled/no-op mode** — the application continues without tracing, no `.dtj` files are created, and no agent process is spawned.
+
+### Blender/macOS caveat
+
+Python/Blender launched from GUI may not have Homebrew in `PATH`. The SDK now checks the common Homebrew prefixes `/opt/homebrew/bin` (Apple Silicon) and `/usr/local/bin` (Intel) as a fallback. `DTJ_AGENT_PATH` remains the reliable explicit override.
 
 ## Explicit Disabled/No-Op Behavior
 

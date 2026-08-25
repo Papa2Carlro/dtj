@@ -3,6 +3,7 @@
 import socket
 import time
 import warnings
+import os
 from pathlib import Path
 from typing import Optional, Any, Dict
 from contextlib import contextmanager
@@ -29,6 +30,41 @@ from .exceptions import (
     DTJValueError,
     DTJSessionError,
 )
+
+
+def find_config_path(config_path: Optional[str | Path] = None) -> Optional[Path]:
+    """Find config file path using discovery order.
+    
+    Priority:
+    1. Explicit config_path argument
+    2. DTJ_CONFIG_PATH environment variable
+    3. Search for .dtj/config.toml from cwd upwards
+    
+    Returns None if not found.
+    """
+    # 1. Explicit config_path
+    if config_path:
+        path = Path(config_path)
+        if path.is_file():
+            return path.resolve()
+        return None
+    
+    # 2. DTJ_CONFIG_PATH environment variable
+    env_path = os.environ.get("DTJ_CONFIG_PATH")
+    if env_path:
+        path = Path(env_path)
+        if path.is_file():
+            return path.resolve()
+        return None
+    
+    # 3. Search for .dtj/config.toml from cwd upwards
+    cwd = Path.cwd()
+    for parent in [cwd] + list(cwd.parents):
+        candidate = parent / ".dtj" / "config.toml"
+        if candidate.is_file():
+            return candidate.resolve()
+    
+    return None
 
 
 class NoOpTraceSession:
@@ -86,27 +122,60 @@ class TraceSession:
         cls,
         producer_name: str,
         producer_version: str,
-        data_dir: str | Path = "./traces",
+        data_dir: Optional[str | Path] = None,
         agent_path: Optional[str] = None,
         socket_path: Optional[str] = None,
         session_file_name: Optional[str] = None,
         enabled: bool = True,
+        config_path: Optional[str | Path] = None,
     ) -> "TraceSession | NoOpTraceSession":
-        """Open a new trace session."""
+        """Open a new trace session.
+        
+        Storage location resolution order:
+        1. Explicit data_dir -> agent started with --data-dir
+        2. Found config_path (via argument or discovery) -> agent started with --config  
+        3. Neither data_dir nor config -> fallback to ./traces (backward compatible)
+        
+        If socket_path is provided, connects to existing agent (no discovery needed).
+        
+        Raises:
+            DTJConnectionError: If config_path is explicitly provided but file doesn't exist.
+        """
         
         if not enabled:
             return NoOpTraceSession()
         
+        # Validate explicit config_path - if provided but file doesn't exist, error immediately
+        if config_path is not None:
+            path = Path(config_path)
+            if not path.is_file():
+                raise DTJConnectionError(f"Explicit config_path not found: {config_path}")
+        
+        # Determine config path using discovery order (only if not explicitly provided)
+        found_config = find_config_path(config_path)
+        
+        # Determine if we should use --data-dir or --config for agent startup
+        # Priority: explicit data_dir > found config > fallback data_dir (./traces)
+        
+        # Check if data_dir was explicitly provided (not the default)
+        explicit_data_dir = data_dir is not None
+        
+        # Resolve effective data_dir for agent startup (used when not using config)
+        effective_data_dir = str(data_dir) if data_dir is not None else "./traces"
+        
         discovery = AgentDiscovery(
             agent_path=agent_path,
             socket_path=socket_path,
-            data_dir=str(data_dir),
+            data_dir=effective_data_dir,
+            config_path=str(found_config) if found_config and not explicit_data_dir else None,
+            use_config=found_config is not None and not explicit_data_dir,
         )
         
-        # Check if agent exists before trying to connect
-        agent_binary = discovery.find_agent()
-        if not agent_binary:
-            return NoOpTraceSession()
+        # Check if agent exists before trying to connect (only if not using existing socket)
+        if not socket_path:
+            agent_binary = discovery.find_agent()
+            if not agent_binary:
+                return NoOpTraceSession()
         
         # Start or connect to agent
         try:
@@ -357,12 +426,14 @@ class TraceConfig:
         socket_path: Optional[str] = None,
         enabled: bool = True,
         session_file_name: Optional[str] = None,
+        config_path: Optional[str | Path] = None,
     ):
         self.data_dir = Path(data_dir)
         self.agent_path = agent_path
         self.socket_path = socket_path
         self.enabled = enabled
         self.session_file_name = session_file_name
+        self.config_path = config_path
     
     def open_session(
         self,
@@ -378,4 +449,5 @@ class TraceConfig:
             socket_path=self.socket_path,
             session_file_name=self.session_file_name,
             enabled=self.enabled,
+            config_path=self.config_path,
         )

@@ -292,11 +292,15 @@ class TestSeverityMap(unittest.TestCase):
     """Test severity mapping."""
     
     def test_severity_values(self):
-        self.assertEqual(SEVERITY_MAP["debug"], 0)
-        self.assertEqual(SEVERITY_MAP["info"], 1)
-        self.assertEqual(SEVERITY_MAP["warn"], 2)
-        self.assertEqual(SEVERITY_MAP["error"], 3)
-        self.assertEqual(SEVERITY_MAP["fatal"], 4)
+        expected = {
+            "trace": 0,
+            "debug": 1,
+            "info": 2,
+            "warn": 3,
+            "error": 4,
+            "fatal": 5,
+        }
+        self.assertEqual(SEVERITY_MAP, expected)
 
 
 if __name__ == "__main__":

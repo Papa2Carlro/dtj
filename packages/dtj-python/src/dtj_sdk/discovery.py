@@ -19,10 +19,14 @@ class AgentDiscovery:
         agent_path: Optional[str] = None,
         socket_path: Optional[str] = None,
         data_dir: Optional[str] = None,
+        config_path: Optional[str] = None,
+        use_config: bool = False,
     ):
         self.agent_path = agent_path
         self.socket_path = socket_path
         self.data_dir = data_dir
+        self.config_path = config_path
+        self.use_config = use_config
         self._process: Optional[subprocess.Popen] = None
         self._temp_socket_dir: Optional[tempfile.TemporaryDirectory] = None
         self._warning_emitted = False
@@ -46,12 +50,29 @@ class AgentDiscovery:
         # 3. PATH lookup
         which_path = shutil.which("dtj-agent")
         if which_path:
-            return which_path
+            path = Path(which_path)
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path)
+        
+        # 4. macOS Homebrew fallback
+        for candidate in ("/opt/homebrew/bin/dtj-agent", "/usr/local/bin/dtj-agent"):
+            path = Path(candidate)
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path)
+        
+        # 5. Cargo dev install fallback
+        cargo_path = Path.home() / ".cargo" / "bin" / "dtj-agent"
+        if cargo_path.is_file() and os.access(cargo_path, os.X_OK):
+            return str(cargo_path)
         
         return None
     
     def start_agent(self) -> str:
         """Start dtj-agent and return socket path."""
+        # If socket_path provided, don't start agent (connect to existing)
+        if self.socket_path:
+            return self.socket_path
+        
         agent_binary = self.find_agent()
         if not agent_binary:
             self._emit_warning()
@@ -60,20 +81,44 @@ class AgentDiscovery:
                 "Tracing disabled."
             )
         
-        # If socket_path provided, don't start agent (connect to existing)
-        if self.socket_path:
-            return self.socket_path
+        # Ensure data_dir exists - default to ./traces if not set
+        data_dir = Path(self.data_dir) if self.data_dir else Path.cwd() / "traces"
         
-        # Create temporary directory for socket
+        if self.use_config and self.config_path:
+            # Use --config flag instead of --data-dir
+            config_file = Path(self.config_path)
+            if not config_file.is_file():
+                # Try to read it anyway - start_agent will handle the error
+                pass
+            
+            # Create socket dir for agent (even when using config)
+            self._temp_socket_dir = tempfile.TemporaryDirectory(prefix="dtj-agent-")
+            socket_dir = Path(self._temp_socket_dir.name)
+            socket_path = socket_dir / "agent.sock"
+            
+            # Start agent with --config flag instead of --data-dir
+            try:
+                self._process = subprocess.Popen(
+                    [agent_binary, "--socket", str(socket_path), "--config", str(config_file)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as e:
+                self._cleanup()
+                raise DTJConnectionError(f"Failed to start dtj-agent with --config: {e}")
+            
+            return str(socket_path)
+        
+        # Create temporary directory for socket (default behavior)
         self._temp_socket_dir = tempfile.TemporaryDirectory(prefix="dtj-agent-")
         socket_dir = Path(self._temp_socket_dir.name)
         socket_path = socket_dir / "agent.sock"
         
-        # Ensure data_dir exists
-        data_dir = Path(self.data_dir) if self.data_dir else Path.cwd() / "traces"
+        # Ensure data_dir exists (use --data-dir flag)
         data_dir.mkdir(parents=True, exist_ok=True)
         
-        # Start agent process
+        # Start agent process with --data-dir flag  
         try:
             self._process = subprocess.Popen(
                 [agent_binary, "--socket", str(socket_path), "--data-dir", str(data_dir)],

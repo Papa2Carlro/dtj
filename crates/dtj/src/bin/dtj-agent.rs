@@ -21,6 +21,17 @@ const PROTOCOL_VERSION: u32 = 1;
 /// Maximum frame size we accept (1 MiB) to avoid unbounded allocations.
 const MAX_FRAME_SIZE: usize = 1_048_576;
 
+/// Configuration structure for TOML parsing.
+#[derive(Debug, serde::Deserialize)]
+struct Config {
+    storage: Option<StorageConfig>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StorageConfig {
+    data_dir: Option<String>,
+}
+
 /// Command opcodes (client → server).
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -640,12 +651,110 @@ fn handle_client(mut stream: UnixStream, data_dir: &Path) -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 5 || args[1] != "--socket" || args[3] != "--data-dir" {
-        eprintln!("Usage: dtj-agent --socket <path> --data-dir <dir>");
-        std::process::exit(1);
+
+    // Parse arguments supporting both formats:
+    // Old: dtj-agent --socket <path> --data-dir <dir>
+    // New: dtj-agent --socket <path> --config <path>
+    // Both: dtj-agent --socket <path> --data-dir <dir> --config <path> (data-dir wins)
+
+    let mut socket_path: Option<PathBuf> = None;
+    let mut data_dir: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--socket" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --socket");
+                    std::process::exit(1);
+                }
+                socket_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--data-dir" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --data-dir");
+                    std::process::exit(1);
+                }
+                data_dir = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--config" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --config");
+                    std::process::exit(1);
+                }
+                config_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            _ => {
+                eprintln!("Unknown argument: {}", args[i]);
+                eprintln!("Usage: dtj-agent --socket <path> [--data-dir <dir>] [--config <path>]");
+                std::process::exit(1);
+            }
+        }
     }
-    let socket_path = PathBuf::from(&args[2]);
-    let data_dir = PathBuf::from(&args[4]);
+
+    let socket_path = socket_path.ok_or_else(|| {
+        eprintln!("--socket is required");
+        io::Error::other("--socket is required")
+    })?;
+
+    // Determine data_dir with priority:
+    // 1. Explicit --data-dir (highest priority)
+    // 2. From --config file [storage].data_dir
+    // 3. Error if neither provided (no silent fallback)
+
+    let final_data_dir = if let Some(explicit_data_dir) = data_dir {
+        explicit_data_dir
+    } else if let Some(config_path) = config_path {
+        // Read and parse config file
+        let config_content = fs::read_to_string(&config_path).map_err(|e| {
+            io::Error::other(format!(
+                "failed to read config file {}: {:?}",
+                config_path.display(),
+                e
+            ))
+        })?;
+
+        let config: Config = toml::from_str(&config_content).map_err(|e| {
+            io::Error::other(format!(
+                "failed to parse config file {}: {:?}",
+                config_path.display(),
+                e
+            ))
+        })?;
+
+        let storage_config = config.storage.ok_or_else(|| {
+            io::Error::other(format!(
+                "missing [storage] section in config file {}",
+                config_path.display()
+            ))
+        })?;
+
+        let data_dir_str = storage_config.data_dir.ok_or_else(|| {
+            io::Error::other(format!(
+                "missing storage.data_dir in config file {}",
+                config_path.display()
+            ))
+        })?;
+
+        // Resolve relative path from config file's directory
+        let config_dir = config_path
+            .parent()
+            .ok_or_else(|| io::Error::other("config file has no parent directory"))?;
+
+        let data_dir_path = PathBuf::from(data_dir_str);
+        if data_dir_path.is_relative() {
+            config_dir.join(data_dir_path)
+        } else {
+            data_dir_path
+        }
+    } else {
+        eprintln!("Either --data-dir or --config must be provided");
+        std::process::exit(1);
+    };
 
     // Validate socket path: if exists, must be a Unix socket
     if socket_path.exists() {
@@ -662,15 +771,20 @@ fn main() -> io::Result<()> {
     }
 
     // Ensure data directory exists
-    fs::create_dir_all(&data_dir)
-        .map_err(|e| io::Error::other(format!("cannot create data dir: {:?}", e)))?;
+    fs::create_dir_all(&final_data_dir).map_err(|e| {
+        io::Error::other(format!(
+            "cannot create data dir {}: {:?}",
+            final_data_dir.display(),
+            e
+        ))
+    })?;
 
     let listener = UnixListener::bind(&socket_path)?;
     // Accept a single connection (MVP)
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                if let Err(e) = handle_client(s, &data_dir) {
+                if let Err(e) = handle_client(s, &final_data_dir) {
                     // log error silently
                     let _ = e;
                 }

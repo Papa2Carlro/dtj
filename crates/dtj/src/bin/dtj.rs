@@ -40,6 +40,20 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        "init" => {
+            let apply = args.next().map(|s| s == "--apply").unwrap_or(false);
+            if args.next().is_some() {
+                eprintln!("usage: dtj init [--apply]");
+                return ExitCode::from(2);
+            }
+            match init_command(apply) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("dtj init error: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         "--help" | "-h" | "help" => {
             print_usage();
             ExitCode::SUCCESS
@@ -55,6 +69,7 @@ fn main() -> ExitCode {
 fn print_usage() {
     eprintln!("dtj — DTJ v1 reference CLI (adapter v{ADAPTER_VERSION})");
     eprintln!("  dtj read-session <session_path>");
+    eprintln!("  dtj init [--apply]");
 }
 
 fn read_session_json(session_path: &str) -> String {
@@ -409,5 +424,123 @@ fn dict_kind_name(kind: dtj::DictKind) -> &'static str {
         dtj::DictKind::Category => "category",
         dtj::DictKind::EventName => "event_name",
         dtj::DictKind::String => "string",
+    }
+}
+
+fn init_command(apply: bool) -> Result<(), String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let (lang, sdks) = detect_lang_and_sdks(&cwd);
+    if !apply {
+        println!("dtj init");
+        println!("language: {}", lang);
+        println!();
+        if sdks.is_empty() {
+            println!("SDKs: none");
+        } else {
+            println!("SDKs: {}", sdks.join(", "));
+        }
+        println!("next: dtj init --apply");
+        println!("files:");
+        println!("   .dtj/config.toml (created)");
+        println!("   .gitignore (line added: .dtj/)");
+        println!("   DTJ_AGENT.md (created)");
+        println!("   AGENTS.md (DTJ block inserted)");
+        return Ok(());
+    }
+    let dtj_dir = cwd.join(".dtj");
+    std::fs::create_dir_all(&dtj_dir).map_err(|e| e.to_string())?;
+    apply_config(&dtj_dir.join("config.toml"))?;
+    apply_gitignore(&cwd.join(".gitignore"))?;
+    apply_dtj_agent(&cwd.join("DTJ_AGENT.md"), &lang, &sdks)?;
+    apply_agents(&cwd.join("AGENTS.md"))?;
+    println!("Applied DTJ bootstrap");
+    Ok(())
+}
+
+fn detect_lang_and_sdks(root: &Path) -> (String, Vec<String>) {
+    let mut lang = "unknown".to_string();
+    if std::fs::exists(root.join("pyproject.toml")).unwrap_or(false)
+        || std::fs::exists(root.join("requirements.txt")).unwrap_or(false)
+    {
+        lang = "Python".to_string();
+    } else if std::fs::exists(root.join("package.json")).unwrap_or(false) {
+        lang = "TypeScript".to_string();
+    } else if std::fs::exists(root.join("go.mod")).unwrap_or(false) {
+        lang = "Go".to_string();
+    } else if find_files(root, " *.csproj").is_some()
+        || std::fs::exists(root.join("*.csproj")).unwrap_or(false)
+    {
+        lang = "C#".to_string();
+    } else if std::fs::exists(root.join("CMakeLists.txt")).unwrap_or(false) {
+        lang = "C/C++".to_string();
+    }
+    let sdks = vec![];
+    (lang, sdks)
+}
+
+fn find_files(_root: &Path, _pat: &str) -> Option<()> {
+    None
+}
+
+fn apply_config(path: &Path) -> Result<(), String> {
+    let s = r#"[storage]
+data_dir = "traces"
+"#;
+    if !path.exists() {
+        std::fs::write(path, s).map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn apply_gitignore(path: &Path) -> Result<(), String> {
+    let line = ".dtj/";
+    if path.exists() {
+        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        if content.contains(line) {
+            return Ok(());
+        }
+        let mut new_content = content;
+        if !new_content.ends_with('\n') {
+            new_content.push('\n');
+        }
+        new_content.push_str(line);
+        std::fs::write(path, new_content).map_err(|e| e.to_string())
+    } else {
+        std::fs::write(path, line).map_err(|e| e.to_string())
+    }
+}
+
+fn apply_dtj_agent(path: &Path, lang: &str, sdks: &[String]) -> Result<(), String> {
+    let s = format!(
+        "DTJ Agent for {lang} with SDKs: {}\n",
+        if sdks.is_empty() {
+            "none".to_string()
+        } else {
+            sdks.join(", ")
+        }
+    );
+    if !path.exists() {
+        std::fs::write(path, s).map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn apply_agents(path: &Path) -> Result<(), String> {
+    let block = "### DTJ Agent\n";
+    if path.exists() {
+        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        if content.contains("DTJ Agent") {
+            return Ok(());
+        }
+        let mut new_content = content;
+        if !new_content.ends_with('\n') {
+            new_content.push('\n');
+        }
+        new_content.push_str(block);
+        std::fs::write(path, new_content).map_err(|e| e.to_string())
+    } else {
+        std::fs::write(path, block).map_err(|e| e.to_string())
     }
 }

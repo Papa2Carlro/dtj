@@ -44,14 +44,48 @@ class TestAgentDiscovery(unittest.TestCase):
     
     @patch.dict(os.environ, {}, clear=True)
     @patch("shutil.which", return_value="/usr/bin/dtj-agent")
-    def test_find_agent_path_lookup(self, mock_which):
+    @patch("pathlib.Path.is_file", return_value=True)
+    @patch("os.access", return_value=True)
+    def test_find_agent_path_lookup(self, mock_access, mock_is_file, mock_which):
         discovery = AgentDiscovery()
         found = discovery.find_agent()
         self.assertEqual(found, "/usr/bin/dtj-agent")
     
     @patch.dict(os.environ, {}, clear=True)
     @patch("shutil.which", return_value=None)
-    def test_find_agent_not_found(self, mock_which):
+    @patch("os.access", return_value=True)
+    def test_find_agent_homebrew_arm(self, mock_access, mock_which):
+        with patch("pathlib.Path.is_file", return_value=True):
+            discovery = AgentDiscovery()
+            found = discovery.find_agent()
+            # first fallback is /opt/homebrew/bin/dtj-agent
+            self.assertEqual(found, "/opt/homebrew/bin/dtj-agent")
+    
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("shutil.which", return_value=None)
+    @patch("os.access", return_value=True)
+    def test_find_agent_homebrew_intel(self, mock_access, mock_which):
+        with patch("pathlib.Path.is_file", side_effect=[False, True]):
+            discovery = AgentDiscovery()
+            found = discovery.find_agent()
+            # first candidate fails, second succeeds
+            self.assertEqual(found, "/usr/local/bin/dtj-agent")
+    
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("shutil.which", return_value=None)
+    @patch("os.access", return_value=True)
+    def test_find_agent_cargo_fallback(self, mock_access, mock_which):
+        with patch("pathlib.Path.is_file", side_effect=[False, False, True]):
+            with patch("pathlib.Path.home", return_value=Path("/home/user")):
+                discovery = AgentDiscovery()
+                found = discovery.find_agent()
+                self.assertEqual(found, "/home/user/.cargo/bin/dtj-agent")
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("shutil.which", return_value=None)
+    @patch("pathlib.Path.is_file", return_value=False)
+    @patch("os.access", return_value=False)
+    def test_find_agent_not_found(self, mock_access, mock_is_file, mock_which):
         discovery = AgentDiscovery()
         found = discovery.find_agent()
         self.assertIsNone(found)

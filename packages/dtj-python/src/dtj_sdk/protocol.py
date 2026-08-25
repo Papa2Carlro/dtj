@@ -39,11 +39,12 @@ class DictKind:
 
 # Severity mapping (matches dtj::Severity)
 SEVERITY_MAP = {
-    "debug": 0,
-    "info": 1,
-    "warn": 2,
-    "error": 3,
-    "fatal": 4,
+    "trace": 0,
+    "debug": 1,
+    "info": 2,
+    "warn": 3,
+    "error": 4,
+    "fatal": 5,
 }
 
 # Type tags (match dtj::Value)
