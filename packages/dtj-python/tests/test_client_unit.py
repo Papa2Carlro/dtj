@@ -63,7 +63,56 @@ class TestTraceConfig(unittest.TestCase):
     
     def test_default_config(self):
         config = TraceConfig()
-        self.assertEqual(config.data_dir, Path("./traces"))
+        self.assertIsNone(config.data_dir)
+        self.assertIsNone(config.agent_path)
+        self.assertIsNone(config.socket_path)
+        self.assertTrue(config.enabled)
+        self.assertIsNone(config.session_file_name)
+    
+    def test_custom_config(self):
+        config = TraceConfig(
+            data_dir="/custom/traces",
+            agent_path="/custom/agent",
+            socket_path="/custom/socket",
+            enabled=False,
+            session_file_name="custom.dtj",
+        )
+        self.assertEqual(config.data_dir, Path("/custom/traces"))
+        self.assertEqual(config.agent_path, "/custom/agent")
+        self.assertEqual(config.socket_path, "/custom/socket")
+        self.assertFalse(config.enabled)
+        self.assertEqual(config.session_file_name, "custom.dtj")
+    
+    def test_config_with_config_path_only(self):
+        """Test that config with only config_path sets use_config=True."""
+        import tempfile
+        from pathlib import Path
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / ".dtj" / "config.toml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('[storage]\ndata_dir = "traces"\n')
+            
+            config = TraceConfig(config_path=str(config_path))
+            # data_dir should be None (not explicitly set by user)
+            self.assertIsNone(config.data_dir)
+            # config_path should be stored
+            self.assertEqual(config.config_path, str(config_path))
+    
+    def test_config_explicit_data_dir_wins_over_config(self):
+        """Test that explicit data_dir (even "./traces") wins over config."""
+        import tempfile
+        from pathlib import Path
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / ".dtj" / "config.toml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('[storage]\ndata_dir = "traces"\n')
+            
+            # Explicit data_dir should win over config
+            config = TraceConfig(data_dir="./traces", config_path=str(config_path))
+            self.assertEqual(config.data_dir, Path("./traces"))
+            self.assertEqual(config.config_path, str(config_path))
         self.assertIsNone(config.agent_path)
         self.assertIsNone(config.socket_path)
         self.assertTrue(config.enabled)

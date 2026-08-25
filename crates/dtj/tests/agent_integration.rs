@@ -624,3 +624,127 @@ fn agent_malformed_opensession_metadata() {
     let status = child.wait().unwrap();
     assert!(status.success());
 }
+
+#[test]
+fn agent_with_config_relative_data_dir() {
+    // Test that dtj-agent with --config resolves relative data_dir from config file location
+    let temp_dir = tempfile::tempdir().unwrap();
+    let base_path = temp_dir.path();
+
+    // Create .dtj/config.toml with relative data_dir
+    let dtj_dir = base_path.join(".dtj");
+    std::fs::create_dir_all(&dtj_dir).unwrap();
+    let config_path = dtj_dir.join("config.toml");
+    std::fs::write(&config_path, b"[storage]\ndata_dir = \"traces\"\n").unwrap();
+
+    // Create socket in temp dir
+    let sock_dir = tempfile::tempdir().unwrap();
+    let sock_path = sock_dir.path().join("agent.sock");
+    let sock_str = sock_path.to_str().unwrap();
+
+    let agent_bin = std::env::var("CARGO_BIN_EXE_dtj-agent")
+        .expect("CARGO_BIN_EXE_dtj-agent not set; run via `cargo test`");
+    let child = Command::new(agent_bin)
+        .arg("--socket")
+        .arg(sock_str)
+        .arg("--config")
+        .arg(&config_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("failed to spawn dtj-agent");
+
+    let mut _guard = ChildGuard { child: Some(child) };
+
+    // Connect with retry
+    let mut stream = connect_with_retry(sock_str, Duration::from_secs(2));
+
+    // Hello
+    write_frame(&mut stream, 0x01, &PROTOCOL_VERSION.to_le_bytes()).unwrap();
+    let resp = expect_response(&mut stream, 0x81);
+    assert_eq!(
+        u32::from_le_bytes(resp[..4].try_into().unwrap()),
+        PROTOCOL_VERSION
+    );
+
+    // OpenSession
+    let session_id = [
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10,
+    ];
+    let start_utc_unix_ms = 1722470400000i64;
+    let mono_origin_ns = 0u64;
+    let producer_name = b"test-prod";
+    let producer_version = b"1.0.0";
+    let file_name = b"session.dtj";
+
+    let mut open_body = Vec::new();
+    open_body.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
+    open_body.extend_from_slice(file_name);
+    open_body.extend_from_slice(&session_id);
+    open_body.extend_from_slice(&start_utc_unix_ms.to_le_bytes());
+    open_body.extend_from_slice(&mono_origin_ns.to_le_bytes());
+    open_body.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
+    open_body.extend_from_slice(producer_name);
+    open_body.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
+    open_body.extend_from_slice(producer_version);
+
+    write_frame(&mut stream, 0x02, &open_body).unwrap();
+    expect_response(&mut stream, 0x82);
+
+    // Intern and append one event
+    let domain_id = intern(&mut stream, 1, "test");
+    let category_id = intern(&mut stream, 2, "cat");
+    let event_name_id = intern(&mut stream, 3, "event");
+
+    {
+        let mut body = Vec::new();
+        body.extend_from_slice(&1_250_000_000u64.to_le_bytes());
+        body.extend_from_slice(&domain_id.to_le_bytes());
+        body.extend_from_slice(&category_id.to_le_bytes());
+        body.extend_from_slice(&event_name_id.to_le_bytes());
+        body.extend_from_slice(&[0u8; 4]); // correlation_id = 0
+        body.push(Severity::Info as u8);
+        body.extend_from_slice(&1u16.to_le_bytes());
+
+        let field_id = intern(&mut stream, 4, "value");
+        body.extend_from_slice(&field_id.to_le_bytes());
+        body.push(0x02); // I32
+        body.extend_from_slice(&[0, 0, 0]);
+        body.extend_from_slice(&42i32.to_le_bytes());
+
+        write_frame(&mut stream, 0x03, &body).unwrap();
+        let resp = expect_response(&mut stream, 0x83);
+        let seq1 = u64::from_le_bytes(resp[..8].try_into().unwrap());
+        assert_eq!(seq1, 1);
+    }
+
+    // FinishSession
+    write_frame(&mut stream, 0x04, &[]).unwrap();
+    expect_response(&mut stream, 0x84);
+
+    drop(stream);
+    let mut child = _guard.child.take().unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success());
+
+    // Validate produced file - should be in <temp>/.dtj/traces (relative to config file)
+    let expected_trace_dir = dtj_dir.join("traces");
+    let out_path = expected_trace_dir.join("session.dtj");
+
+    assert!(
+        out_path.exists(),
+        "Expected trace file at {:?}, but it doesn't exist",
+        out_path
+    );
+
+    // Verify we can read it
+    let reader = SessionReader::open(&out_path).expect("SessionReader open");
+    assert_eq!(reader.events().len(), 1);
+
+    println!(
+        "Config integration test passed: trace written to {:?}",
+        out_path
+    );
+}

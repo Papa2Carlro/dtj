@@ -421,14 +421,14 @@ class TraceConfig:
     
     def __init__(
         self,
-        data_dir: str | Path = "./traces",
+        data_dir: Optional[str | Path] = None,
         agent_path: Optional[str] = None,
         socket_path: Optional[str] = None,
         enabled: bool = True,
         session_file_name: Optional[str] = None,
         config_path: Optional[str | Path] = None,
     ):
-        self.data_dir = Path(data_dir)
+        self.data_dir = Path(data_dir) if data_dir is not None else None
         self.agent_path = agent_path
         self.socket_path = socket_path
         self.enabled = enabled
