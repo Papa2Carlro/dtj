@@ -1,0 +1,13 @@
+[package]
+name = "dtj-sdk"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "dtj_sdk"
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"

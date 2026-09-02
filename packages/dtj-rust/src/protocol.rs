@@ -1,0 +1,270 @@
+use crate::error::Error;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
+
+// =============================================================================
+// Frame read/write
+// =============================================================================
+
+/// Write a frame: 4-byte little-endian length (including opcode) + opcode + payload
+pub fn write_frame(stream: &mut UnixStream, opcode: u8, payload: &[u8]) -> Result<(), Error> {
+    let len = 1u32 + payload.len() as u32;
+    let mut frame = Vec::with_capacity(4 + 1 + payload.len());
+    frame.extend_from_slice(&len.to_le_bytes());
+    frame.push(opcode);
+    frame.extend_from_slice(payload);
+    stream.write_all(&frame).map_err(|_| Error::IoError)?;
+    Ok(())
+}
+
+/// Read a frame: 4-byte length + opcode + payload
+pub fn read_frame(stream: &mut UnixStream) -> Result<(u8, Vec<u8>), Error> {
+    let mut len_buf = [0u8; 4];
+    stream
+        .read_exact(&mut len_buf)
+        .map_err(|_| Error::IoError)?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len == 0 || len > 1024 * 1024 {
+        return Err(Error::FrameTooLarge);
+    }
+    let mut frame = vec![0u8; len];
+    stream.read_exact(&mut frame).map_err(|_| Error::IoError)?;
+    let opcode = frame[0];
+    let payload = frame[1..].to_vec();
+    Ok((opcode, payload))
+}
+
+// =============================================================================
+// Hello / HelloOk
+// =============================================================================
+
+pub const OPCODE_HELLO: u8 = 0x01;
+pub const OPCODE_HELLO_OK: u8 = 0x81;
+pub const PROTOCOL_VERSION: u32 = 1;
+
+pub fn write_hello(stream: &mut UnixStream) -> Result<(), Error> {
+    write_frame(stream, OPCODE_HELLO, &PROTOCOL_VERSION.to_le_bytes())
+}
+
+pub fn read_hello_ok(stream: &mut UnixStream) -> Result<(), Error> {
+    let (opcode, payload) = read_frame(stream)?;
+    if opcode != OPCODE_HELLO_OK {
+        return Err(Error::Protocol);
+    }
+    if payload.len() != 4 {
+        return Err(Error::Protocol);
+    }
+    let version = u32::from_le_bytes(payload[..4].try_into().unwrap());
+    if version != PROTOCOL_VERSION {
+        return Err(Error::BadVersion);
+    }
+    Ok(())
+}
+
+/// Read HelloOk or Error frame.
+/// Returns Ok(true) for HelloOk, Ok(false) for Error, Err for other frames.
+pub fn read_hello_ok_or_error(stream: &mut UnixStream) -> Result<bool, Error> {
+    let (opcode, _payload) = read_frame(stream)?;
+    match opcode {
+        OPCODE_HELLO_OK => Ok(true),
+        OPCODE_ERROR => Ok(false),
+        _ => Err(Error::Protocol),
+    }
+}
+
+// =============================================================================
+// OpenSession / OpenSessionOk
+// =============================================================================
+
+pub const OPCODE_OPEN_SESSION: u8 = 0x02;
+pub const OPCODE_OPEN_SESSION_OK: u8 = 0x82;
+
+/// Payload for OpenSession frame
+#[derive(Debug, Clone)]
+pub struct OpenSessionPayload {
+    pub file_name: String,
+    pub session_id: [u8; 16],
+    pub start_utc_unix_ms: i64,
+    pub mono_origin_ns: u64,
+    pub producer_name: String,
+    pub producer_version: String,
+}
+
+pub fn write_open_session(stream: &mut UnixStream, p: &OpenSessionPayload) -> Result<(), Error> {
+    let mut buf = Vec::new();
+    let file_name = p.file_name.as_bytes();
+    buf.extend_from_slice(&(file_name.len() as u16).to_le_bytes());
+    buf.extend_from_slice(file_name);
+    buf.extend_from_slice(&p.session_id);
+    buf.extend_from_slice(&p.start_utc_unix_ms.to_le_bytes());
+    buf.extend_from_slice(&p.mono_origin_ns.to_le_bytes());
+    let producer_name = p.producer_name.as_bytes();
+    buf.extend_from_slice(&(producer_name.len() as u16).to_le_bytes());
+    buf.extend_from_slice(producer_name);
+    let producer_version = p.producer_version.as_bytes();
+    buf.extend_from_slice(&(producer_version.len() as u16).to_le_bytes());
+    buf.extend_from_slice(producer_version);
+    write_frame(stream, OPCODE_OPEN_SESSION, &buf)
+}
+
+pub fn read_open_session_ok(stream: &mut UnixStream) -> Result<(), Error> {
+    let (opcode, payload) = read_frame(stream)?;
+    if opcode != OPCODE_OPEN_SESSION_OK {
+        return Err(Error::Protocol);
+    }
+    if !payload.is_empty() {
+        return Err(Error::Protocol);
+    }
+    Ok(())
+}
+
+/// Read OpenSessionOk or Error frame.
+/// Returns Ok(true) for OpenSessionOk, Ok(false) for Error, Err for other frames.
+pub fn read_open_session_ok_or_error(stream: &mut UnixStream) -> Result<bool, Error> {
+    let (opcode, payload) = read_frame(stream)?;
+    match opcode {
+        OPCODE_OPEN_SESSION_OK if payload.is_empty() => Ok(true),
+        OPCODE_ERROR => Ok(false),
+        _ => Err(Error::Protocol),
+    }
+}
+
+// =============================================================================
+// Intern / InternOk
+// =============================================================================
+
+pub const OPCODE_INTERN: u8 = 0x06;
+pub const OPCODE_INTERN_OK: u8 = 0x86;
+
+pub const DICT_KIND_DOMAIN: u8 = 1;
+pub const DICT_KIND_CATEGORY: u8 = 2;
+pub const DICT_KIND_EVENT_NAME: u8 = 3;
+pub const DICT_KIND_STRING: u8 = 4;
+
+pub fn write_intern(stream: &mut UnixStream, dict_kind: u8, name: &str) -> Result<(), Error> {
+    let name_bytes = name.as_bytes();
+    let mut payload = Vec::with_capacity(1 + 2 + name_bytes.len());
+    payload.push(dict_kind);
+    payload.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+    payload.extend_from_slice(name_bytes);
+    write_frame(stream, OPCODE_INTERN, &payload)
+}
+
+pub fn read_intern_ok(stream: &mut UnixStream) -> Result<u32, Error> {
+    let (opcode, payload) = read_frame(stream)?;
+    if opcode != OPCODE_INTERN_OK {
+        return Err(Error::Protocol);
+    }
+    if payload.len() != 4 {
+        return Err(Error::Protocol);
+    }
+    Ok(u32::from_le_bytes(payload[..4].try_into().unwrap()))
+}
+
+// =============================================================================
+// AppendEvent / AppendEventOk
+// =============================================================================
+
+pub const OPCODE_APPEND_EVENT: u8 = 0x03;
+pub const OPCODE_APPEND_EVENT_OK: u8 = 0x83;
+
+pub fn write_append_event(
+    stream: &mut UnixStream,
+    monotonic_ns: u64,
+    domain_id: u32,
+    category_id: u32,
+    event_name_id: u32,
+    correlation_id: u32,
+    severity: u8,
+    name_id: u32,
+    type_tag: u8,
+    value_body: &[u8],
+) -> Result<(), Error> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&monotonic_ns.to_le_bytes());
+    payload.extend_from_slice(&domain_id.to_le_bytes());
+    payload.extend_from_slice(&category_id.to_le_bytes());
+    payload.extend_from_slice(&event_name_id.to_le_bytes());
+    payload.extend_from_slice(&correlation_id.to_le_bytes());
+    payload.push(severity);
+    payload.extend_from_slice(&1u16.to_le_bytes()); // field_count = 1
+    payload.extend_from_slice(&name_id.to_le_bytes());
+    payload.push(type_tag);
+    payload.extend_from_slice(&[0u8; 3]); // reserved
+    payload.extend_from_slice(value_body);
+    write_frame(stream, OPCODE_APPEND_EVENT, &payload)
+}
+
+pub fn read_append_event_ok(stream: &mut UnixStream) -> Result<u64, Error> {
+    let (opcode, payload) = read_frame(stream)?;
+    if opcode != OPCODE_APPEND_EVENT_OK {
+        return Err(Error::Protocol);
+    }
+    if payload.len() != 8 {
+        return Err(Error::Protocol);
+    }
+    Ok(u64::from_le_bytes(payload[..8].try_into().unwrap()))
+}
+
+// =============================================================================
+// FinishSession / FinishSessionOk
+// =============================================================================
+
+pub const OPCODE_FINISH_SESSION: u8 = 0x04;
+pub const OPCODE_FINISH_SESSION_OK: u8 = 0x84;
+
+pub fn write_finish_session(stream: &mut UnixStream) -> Result<(), Error> {
+    write_frame(stream, OPCODE_FINISH_SESSION, &[])
+}
+
+pub fn read_finish_session_ok(stream: &mut UnixStream) -> Result<(), Error> {
+    let (opcode, payload) = read_frame(stream)?;
+    if opcode != OPCODE_FINISH_SESSION_OK {
+        return Err(Error::Protocol);
+    }
+    if !payload.is_empty() {
+        return Err(Error::Protocol);
+    }
+    Ok(())
+}
+
+/// Read FinishSessionOk or Error frame.
+/// Returns Ok(true) for FinishSessionOk, Ok(false) for Error, Err for other frames.
+pub fn read_finish_session_ok_or_error(stream: &mut UnixStream) -> Result<bool, Error> {
+    let (opcode, payload) = read_frame(stream)?;
+    match opcode {
+        OPCODE_FINISH_SESSION_OK if payload.is_empty() => Ok(true),
+        OPCODE_ERROR => Ok(false),
+        _ => Err(Error::Protocol),
+    }
+}
+
+// =============================================================================
+// Error frame
+// =============================================================================
+
+pub const OPCODE_ERROR: u8 = 0xFF;
+
+pub fn read_error_frame(stream: &mut UnixStream) -> Result<String, Error> {
+    let (opcode, payload) = read_frame(stream)?;
+    if opcode != OPCODE_ERROR {
+        return Err(Error::Protocol);
+    }
+    String::from_utf8(payload).map_err(|_| Error::Protocol)
+}
+
+// =============================================================================
+// Legacy stubs (keep API compatible)
+// =============================================================================
+
+pub fn encode() -> Vec<u8> {
+    vec![0]
+}
+
+pub fn decode(b: &[u8]) -> Result<(), Error> {
+    if b.len() > 1024 * 1024 {
+        Err(Error::FrameTooLarge)
+    } else {
+        Ok(())
+    }
+}
