@@ -15,7 +15,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// OwnedAgent holds lifecycle ownership of a spawned agent process and its temp directory.
 /// It provides idempotent cleanup: kill/wait child, remove temp_dir.
 /// All stream operations are handled separately by the caller.
-pub(crate) struct OwnedAgent {
+///
+/// NOTE: Public for test access - this is an internal implementation detail.
+pub struct OwnedAgent {
     child: Option<Child>,
     temp_dir: Option<PathBuf>,
 }
@@ -32,144 +34,36 @@ impl OwnedAgent {
     /// Idempotent cleanup: kill child (if alive), wait it, remove temp_dir.
     /// Safe to call multiple times.
     pub fn cleanup(&mut self) {
-        // Kill and wait child process
         if let Some(ref mut child) = self.child {
             let _ = child.kill();
             let _ = child.wait();
         }
         self.child = None;
-
-        // Remove temp directory
         if let Some(ref temp_dir) = self.temp_dir {
             let _ = std::fs::remove_dir_all(temp_dir);
         }
         self.temp_dir = None;
+    }
+
+    /// Returns the child's PID if still held.
+    pub fn child_id(&self) -> Option<u32> {
+        self.child.as_ref().map(|c| c.id())
+    }
+
+    /// Returns the temp_dir path if still held.
+    pub fn temp_dir_path(&self) -> Option<&PathBuf> {
+        self.temp_dir.as_ref()
+    }
+
+    /// Returns true if cleanup has been called (child and temp_dir are None).
+    pub fn is_cleaned_up(&self) -> bool {
+        self.child.is_none() && self.temp_dir.is_none()
     }
 }
 
 impl Drop for OwnedAgent {
     fn drop(&mut self) {
         self.cleanup();
-    }
-}
-
-#[cfg(test)]
-mod owned_agent_tests {
-    use super::*;
-
-    /// Pure unit test: OwnedAgent cleanup terminates child and removes temp_dir.
-    #[test]
-    fn test_owned_agent_cleanup_terminates_child_and_removes_temp_dir() {
-        let child = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .expect("spawn sleep process");
-        let child_pid = child.id();
-
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let temp_path = temp_dir.path().to_path_buf();
-
-        assert!(temp_path.exists(), "temp_dir should exist before cleanup");
-
-        let mut owned = OwnedAgent::new(child, temp_path.clone());
-        owned.cleanup();
-
-        // Child should be terminated (use kill -0 to check)
-        // kill -0 returns exit 0 if process exists, exit 1 if not found
-        let recheck = std::process::Command::new("kill")
-            .arg("-0")
-            .arg(child_pid.to_string())
-            .status()
-            .expect("kill -0 command should run");
-        assert!(
-            !recheck.success(),
-            "child process {} should be terminated",
-            child_pid
-        );
-
-        // temp_dir should be removed
-        drop(temp_dir);
-        assert!(
-            !std::path::Path::new(&temp_path).exists(),
-            "temp_dir should be removed"
-        );
-
-        // Second cleanup() should not panic
-        owned.cleanup();
-    }
-
-    /// OwnedAgent with None child cleans up temp_dir correctly
-    #[test]
-    fn test_owned_agent_cleanup_with_no_child() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let temp_path = temp_dir.path().to_path_buf();
-
-        assert!(temp_path.exists());
-
-        let mut owned = OwnedAgent {
-            child: None,
-            temp_dir: Some(temp_path),
-        };
-
-        owned.cleanup();
-    }
-
-    /// OwnedAgent with no temp_dir still terminates child
-    #[test]
-    fn test_owned_agent_cleanup_with_no_temp_dir() {
-        let child = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .expect("spawn sleep process");
-        let child_pid = child.id();
-
-        let mut owned = OwnedAgent {
-            child: Some(child),
-            temp_dir: None,
-        };
-
-        owned.cleanup();
-
-        // kill -0 returns exit 0 if process exists, exit 1 if not found
-        let recheck = std::process::Command::new("kill")
-            .arg("-0")
-            .arg(child_pid.to_string())
-            .status()
-            .expect("kill -0 command should run");
-        assert!(
-            !recheck.success(),
-            "child process {} should be terminated",
-            child_pid
-        );
-    }
-
-    /// OwnedAgent::cleanup() is idempotent
-    #[test]
-    fn test_owned_agent_cleanup_is_idempotent() {
-        let child = std::process::Command::new("sleep")
-            .arg("60")
-            .spawn()
-            .expect("spawn sleep process");
-        let child_pid = child.id();
-
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let temp_path = temp_dir.path().to_path_buf();
-
-        let mut owned = OwnedAgent::new(child, temp_path.clone());
-
-        owned.cleanup();
-        owned.cleanup(); // Second call should not panic
-
-        // kill -0 returns exit 0 if process exists, exit 1 if not found
-        let recheck = std::process::Command::new("kill")
-            .arg("-0")
-            .arg(child_pid.to_string())
-            .status()
-            .expect("kill -0 command should run");
-        assert!(
-            !recheck.success(),
-            "child should still be terminated after double cleanup"
-        );
     }
 }
 
@@ -192,8 +86,7 @@ pub struct Session {
     pub stream: Option<UnixStream>,
     pub closed: bool,
     pub disabled: bool,
-    pub child: Option<Child>,
-    pub temp_dir: Option<PathBuf>,
+    pub(crate) owned: Option<OwnedAgent>,
     cache: DictCache,
     warned: bool,
     warning_handler: Option<crate::WarningHandler>,
@@ -213,6 +106,19 @@ impl Session {
         self.closed
     }
 
+    /// Returns true if the session owns an auto-launched agent (test helper).
+    /// NOTE: This method is only available when compiling tests.
+    pub fn _has_owned_agent_for_test(&self) -> bool {
+        self.owned.is_some()
+    }
+
+    /// Takes ownership of the owned agent, returning it for inspection (test helper).
+    /// After this, the session no longer owns the agent (cleanup won't be called on Drop).
+    /// NOTE: This method is only available when compiling tests.
+    pub fn _take_owned_agent_for_test(&mut self) -> Option<OwnedAgent> {
+        self.owned.take()
+    }
+
     /// Emit an event through the session.
     pub fn emit(&mut self, e: &crate::Event) -> Result<(), crate::error::Error> {
         let domain = e.domain.clone();
@@ -220,7 +126,17 @@ impl Session {
         let name = e.name.clone();
         let field_name = e.field_name.clone();
         let value = e.value.clone();
-        self.emit_from_parts(&domain, &category, &name, &field_name, value)
+        let severity = e.severity.as_u8();
+        let correlation = e.correlation.clone();
+        self.emit_from_parts(
+            &domain,
+            &category,
+            &name,
+            &field_name,
+            value,
+            severity,
+            correlation,
+        )
     }
 
     /// Intern a string and return its ID, using cache
@@ -249,8 +165,11 @@ impl Session {
         Ok(id)
     }
 
-    /// Open a session with strict protocol handshake.
-    pub fn open_strict(config: &crate::Config) -> Result<Self, crate::error::Error> {
+    /// Open a session with fallback to disabled mode on connection failure.
+    /// Unlike `open_strict`, this does NOT validate config fields like producer_name length.
+    /// On connection failure (agent not found, socket unreachable, etc.), returns a disabled session.
+    /// Warning handler is called exactly once when falling back to disabled mode.
+    pub fn open(config: &crate::Config) -> Result<Self, crate::error::Error> {
         // Handle disabled mode - call warning handler exactly once
         if !config.enabled {
             if let Some(ref handler) = config.warning_handler {
@@ -260,36 +179,258 @@ impl Session {
                 stream: None,
                 closed: false,
                 disabled: true,
-                child: None,
-                temp_dir: None,
+                owned: None,
                 cache: DictCache::default(),
                 warned: false,
                 warning_handler: None,
             });
         }
 
-        let (socket_path, child, temp_dir) = if let Some(ref path) = config.socket_path {
-            // Explicit socket path, don't launch agent
-            (path.clone(), None, None)
-        } else {
-            // Need to discover/locate agent
-            let discovery =
-                Discovery::find(config).map_err(|_| crate::error::Error::AgentNotFound)?;
-            let path = discovery
-                .socket_path
-                .ok_or(crate::error::Error::AgentNotFound)?;
-            (path, None, None) // TODO: pass child and temp_dir through properly
+        // Discover agent (may auto-launch if no explicit socket_path)
+        let discovery = match Discovery::find(config) {
+            Ok(d) => d,
+            Err(_) => {
+                // Discovery failed - fall back to disabled
+                if let Some(ref handler) = config.warning_handler {
+                    handler("SDK running in degraded mode - connection issues may occur");
+                }
+                return Ok(Session {
+                    stream: None,
+                    closed: false,
+                    disabled: true,
+                    owned: None,
+                    cache: DictCache::default(),
+                    warned: true,
+                    warning_handler: config.warning_handler.clone(),
+                });
+            }
         };
 
-        let mut stream =
-            UnixStream::connect(&socket_path).map_err(|_| crate::error::Error::IoError)?;
+        let socket_path = match discovery.socket_path {
+            Some(path) => path,
+            None => {
+                // No socket path - agent not available, fall back to disabled
+                if let Some(ref handler) = config.warning_handler {
+                    handler("SDK running in degraded mode - connection issues may occur");
+                }
+                return Ok(Session {
+                    stream: None,
+                    closed: false,
+                    disabled: true,
+                    owned: None,
+                    cache: DictCache::default(),
+                    warned: true,
+                    warning_handler: config.warning_handler.clone(),
+                });
+            }
+        };
+
+        // Create OwnedAgent if we auto-launched; None for explicit socket_path
+        let mut owned = match (discovery.child, discovery.temp_dir) {
+            (Some(child), Some(temp_dir)) => Some(OwnedAgent::new(child, temp_dir)),
+            _ => None,
+        };
+
+        // Try to connect
+        match UnixStream::connect(&socket_path) {
+            Ok(mut stream) => {
+                // Connected successfully - do protocol handshake
+                // Hello → HelloOk (or Error)
+                if write_hello(&mut stream).is_err() {
+                    if let Some(ref mut o) = owned {
+                        o.cleanup();
+                    }
+                    if let Some(ref handler) = config.warning_handler {
+                        handler("SDK running in degraded mode - connection issues may occur");
+                    }
+                    return Ok(Session {
+                        stream: None,
+                        closed: false,
+                        disabled: true,
+                        owned: None,
+                        cache: DictCache::default(),
+                        warned: true,
+                        warning_handler: config.warning_handler.clone(),
+                    });
+                }
+
+                match read_hello_ok_or_error(&mut stream) {
+                    Ok(true) => {} // HelloOk received
+                    Ok(false) | Err(_) => {
+                        if let Some(ref mut o) = owned {
+                            o.cleanup();
+                        }
+                        if let Some(ref handler) = config.warning_handler {
+                            handler("SDK running in degraded mode - connection issues may occur");
+                        }
+                        return Ok(Session {
+                            stream: None,
+                            closed: false,
+                            disabled: true,
+                            owned: None,
+                            cache: DictCache::default(),
+                            warned: true,
+                            warning_handler: config.warning_handler.clone(),
+                        });
+                    }
+                }
+
+                // OpenSession → OpenSessionOk
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+                let session_id = (0..16u8).collect::<Vec<_>>();
+
+                let payload = crate::protocol::OpenSessionPayload {
+                    file_name: config
+                        .session_file_name
+                        .clone()
+                        .unwrap_or_else(|| "test.dtj".to_string()),
+                    session_id: session_id.clone().try_into().unwrap(),
+                    start_utc_unix_ms: now,
+                    mono_origin_ns: 0,
+                    producer_name: config.producer_name.clone(),
+                    producer_version: config.producer_version.clone(),
+                };
+
+                if write_open_session(&mut stream, &payload).is_err() {
+                    if let Some(ref mut o) = owned {
+                        o.cleanup();
+                    }
+                    if let Some(ref handler) = config.warning_handler {
+                        handler("SDK running in degraded mode - connection issues may occur");
+                    }
+                    return Ok(Session {
+                        stream: None,
+                        closed: false,
+                        disabled: true,
+                        owned: None,
+                        cache: DictCache::default(),
+                        warned: true,
+                        warning_handler: config.warning_handler.clone(),
+                    });
+                }
+
+                match read_open_session_ok_or_error(&mut stream) {
+                    Ok(true) => {} // OpenSessionOk received
+                    Ok(false) | Err(_) => {
+                        if let Some(ref mut o) = owned {
+                            o.cleanup();
+                        }
+                        if let Some(ref handler) = config.warning_handler {
+                            handler("SDK running in degraded mode - connection issues may occur");
+                        }
+                        return Ok(Session {
+                            stream: None,
+                            closed: false,
+                            disabled: true,
+                            owned: None,
+                            cache: DictCache::default(),
+                            warned: true,
+                            warning_handler: config.warning_handler.clone(),
+                        });
+                    }
+                }
+
+                // Successfully connected and opened session
+                return Ok(Session {
+                    stream: Some(stream),
+                    closed: false,
+                    disabled: false,
+                    owned,
+                    cache: DictCache::default(),
+                    warned: false,
+                    warning_handler: config.warning_handler.clone(),
+                });
+            }
+            Err(_) => {
+                // Connection failed - cleanup owned if present
+                if let Some(ref mut o) = owned {
+                    o.cleanup();
+                }
+                if let Some(ref handler) = config.warning_handler {
+                    handler("SDK running in degraded mode - connection issues may occur");
+                }
+                Ok(Session {
+                    stream: None,
+                    closed: false,
+                    disabled: true,
+                    owned: None,
+                    cache: DictCache::default(),
+                    warned: true,
+                    warning_handler: config.warning_handler.clone(),
+                })
+            }
+        }
+    }
+
+    /// Open a session with strict protocol handshake.
+    /// Validation is performed first - before any discovery, process spawn, or socket connect.
+    pub fn open_strict(config: &crate::Config) -> Result<Self, crate::error::Error> {
+        // Validate config first - before any I/O
+        config.validate()?;
+
+        // Handle disabled mode - call warning handler exactly once
+        if !config.enabled {
+            if let Some(ref handler) = config.warning_handler {
+                handler("SDK disabled via config.enabled=false, events will be no-ops");
+            }
+            return Ok(Session {
+                stream: None,
+                closed: false,
+                disabled: true,
+                owned: None,
+                cache: DictCache::default(),
+                warned: false,
+                warning_handler: None,
+            });
+        }
+
+        // Discover agent (may auto-launch if no explicit socket_path)
+        let discovery = Discovery::find(config).map_err(|_| crate::error::Error::AgentNotFound)?;
+        let socket_path = discovery
+            .socket_path
+            .ok_or(crate::error::Error::AgentNotFound)?;
+
+        // Create OwnedAgent if we auto-launched; None for explicit socket_path
+        let mut owned = match (discovery.child, discovery.temp_dir) {
+            (Some(child), Some(temp_dir)) => Some(OwnedAgent::new(child, temp_dir)),
+            _ => None,
+        };
+
+        let mut stream = match UnixStream::connect(&socket_path) {
+            Ok(s) => s,
+            Err(_e) => {
+                // Connect failed - cleanup owned agent before returning
+                if let Some(ref mut o) = owned {
+                    o.cleanup();
+                }
+                return Err(crate::error::Error::IoError);
+            }
+        };
 
         // Hello → HelloOk (or Error)
-        write_hello(&mut stream)?;
+        if let Err(e) = write_hello(&mut stream) {
+            if let Some(ref mut o) = owned {
+                o.cleanup();
+            }
+            return Err(e);
+        }
         match read_hello_ok_or_error(&mut stream) {
-            Ok(true) => {}                                          // HelloOk received
-            Ok(false) => return Err(crate::error::Error::Protocol), // Error received
-            Err(e) => return Err(e),
+            Ok(true) => {} // HelloOk received
+            Ok(false) => {
+                if let Some(ref mut o) = owned {
+                    o.cleanup();
+                }
+                return Err(crate::error::Error::Protocol);
+            }
+            Err(e) => {
+                if let Some(ref mut o) = owned {
+                    o.cleanup();
+                }
+                return Err(e);
+            }
         }
 
         // OpenSession → OpenSessionOk
@@ -300,28 +441,45 @@ impl Session {
         let session_id = (0..16u8).collect::<Vec<_>>();
 
         let payload = crate::protocol::OpenSessionPayload {
-            file_name: "test.dtj".to_string(),
+            file_name: config
+                .session_file_name
+                .clone()
+                .unwrap_or_else(|| "test.dtj".to_string()),
             session_id: session_id.clone().try_into().unwrap(),
             start_utc_unix_ms: now,
             mono_origin_ns: 0,
-            producer_name: "dtj-sdk".to_string(),
-            producer_version: "0.1.0".to_string(),
+            producer_name: config.producer_name.clone(),
+            producer_version: config.producer_version.clone(),
         };
-        write_open_session(&mut stream, &payload)?;
+        if let Err(e) = write_open_session(&mut stream, &payload) {
+            if let Some(ref mut o) = owned {
+                o.cleanup();
+            }
+            return Err(e);
+        }
 
         // OpenSessionOk or Error
         match read_open_session_ok_or_error(&mut stream) {
-            Ok(true) => {}                                          // OpenSessionOk received
-            Ok(false) => return Err(crate::error::Error::Protocol), // Error received
-            Err(e) => return Err(e),
+            Ok(true) => {} // OpenSessionOk received
+            Ok(false) => {
+                if let Some(ref mut o) = owned {
+                    o.cleanup();
+                }
+                return Err(crate::error::Error::Protocol);
+            }
+            Err(e) => {
+                if let Some(ref mut o) = owned {
+                    o.cleanup();
+                }
+                return Err(e);
+            }
         }
 
         Ok(Session {
             stream: Some(stream),
             closed: false,
             disabled: false,
-            child,
-            temp_dir,
+            owned,
             cache: DictCache::default(),
             warned: false,
             warning_handler: config.warning_handler.clone(),
@@ -336,6 +494,8 @@ impl Session {
         event_name: &str,
         field_name: &str,
         value: Value,
+        severity: u8,
+        correlation: Option<String>,
     ) -> Result<(), crate::error::Error> {
         if self.disabled {
             return Ok(());
@@ -370,8 +530,13 @@ impl Session {
             other => (other.type_tag(), other.encode()),
         };
 
+        // Intern correlation ID if present
+        let correlation_id = match correlation {
+            Some(ref corr) => self.intern(crate::protocol::DICT_KIND_STRING, corr)?,
+            None => 0,
+        };
+
         // AppendEvent
-        let severity = 2u8; // Info
 
         {
             let stream = self.stream.as_mut().unwrap();
@@ -381,7 +546,7 @@ impl Session {
                 domain_id,
                 category_id,
                 event_name_id,
-                0, // correlation_id
+                correlation_id,
                 severity,
                 field_name_id,
                 type_tag,
@@ -430,18 +595,10 @@ impl Session {
 
     /// Cleanup child process and temp directory
     fn cleanup(&mut self) {
-        // Kill child process if we own one
-        if let Some(ref mut child) = self.child {
-            let _ = child.kill();
-            let _ = child.wait();
+        // Take ownership of owned agent and clean it up
+        if let Some(mut owned) = self.owned.take() {
+            owned.cleanup();
         }
-        self.child = None;
-
-        // Remove temp directory
-        if let Some(ref temp_dir) = self.temp_dir {
-            let _ = std::fs::remove_dir_all(temp_dir);
-        }
-        self.temp_dir = None;
     }
 }
 

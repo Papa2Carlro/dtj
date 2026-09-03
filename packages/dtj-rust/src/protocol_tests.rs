@@ -1,241 +1,375 @@
-use crate::protocol::{encode, decode};
-use crate::error::Error;
-#[test] fn frame_too_large() { assert_eq!(decode(&vec![0;1024*1024+1]), Err(Error::FrameTooLarge)); }
-#[test] fn bad_length() { assert!(decode(&[0,0,0,0]).is_ok()); }
+//! Protocol unit tests using in-memory buffers (no Unix sockets).
 
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::net::Shutdown;
-use crate::{Config, Session};
-use std::path::PathBuf;
-
-/// Vertical slice test: open_strict → emit(bool) → close over a mock Unix socket.
-#[test]
-fn mock_socket_vertical_slice() {
-    // Create a temp directory with socket path
-    let temp_dir = tempfile::tempdir().unwrap();
-    let socket_path = temp_dir.path().join("dtj-agent.sock");
-    let socket_path_str = socket_path.to_str().unwrap().to_string();
-
-    // Create UnixListener
-    let listener = UnixListener::bind(&socket_path).unwrap();
-    listener.set_nonblocking(true).ok();
-
-    let opcode_log: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let opcode_log_clone = opcode_log.clone();
-    let intern_count: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
-    let intern_count_clone = intern_count.clone();
-
-    let server_done = Arc::new(Mutex::new(false));
-    let server_done_clone = server_done.clone();
-
-    // Spawn mock dtj-agent server
-    let server = thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
-            let mut local_intern_count = 0;
-
-            loop {
-                // Read 4-byte length
-                let mut len_buf = [0u8; 4];
-                match stream.read_exact(&mut len_buf) {
-                    Ok(_) => {}
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(std::time::Duration::from_micros(100));
-                        continue;
-                    }
-                    Err(_) => break,
-                }
-
-                let len = u32::from_le_bytes(len_buf) as usize;
-                if len == 0 || len > 1024 * 1024 {
-                    break;
-                }
-
-                let mut frame = vec![0u8; len];
-                if stream.read_exact(&mut frame).is_err() {
-                    break;
-                }
-
-                let opcode = frame[0];
-                let payload = &frame[1..];
-                opcode_log_clone.lock().unwrap().push(opcode);
-
-                match opcode {
-                    0x01 => {
-                        // Hello: verify protocol version
-                        assert_eq!(payload.len(), 4, "Hello payload should be 4 bytes");
-                        let version = u32::from_le_bytes(payload[..4].try_into().unwrap());
-                        assert_eq!(version, 1u32, "Protocol version should be 1");
-                        // Send HelloOk
-                        let response = [4u8, 0x81, 1, 0, 0, 0];
-                        stream.write_all(&response).unwrap();
-                    }
-                    0x02 => {
-                        // OpenSession: verify correct opcode order
-                        let log = opcode_log_clone.lock().unwrap();
-                        assert_eq!(log[0], 0x01, "First opcode should be Hello");
-                        assert_eq!(log.len(), 2, "Should have 2 opcodes (Hello + OpenSession)");
-                        drop(log);
-                        // Send OpenSessionOk (empty payload)
-                        let response = [1u8, 0x82];
-                        stream.write_all(&response).unwrap();
-                    }
-                    0x06 => {
-                        // Intern: count and return InternOk
-                        local_intern_count += 1;
-                        intern_count_clone.lock().unwrap().unwrap();
-                        *intern_count_clone.lock().unwrap() = local_intern_count;
-                        let id = local_intern_count as u32;
-                        let mut response = vec![5u8, 0x86];
-                        response.extend_from_slice(&id.to_le_bytes());
-                        stream.write_all(&response).unwrap();
-                    }
-                    0x03 => {
-                        // AppendEvent: verify 4 Intern calls, verify bool type tag
-                        let cnt = *intern_count_clone.lock().unwrap();
-                        assert_eq!(cnt, 4, "Expected 4 Intern calls before AppendEvent");
-                        // type_tag is at offset 32 in AppendEvent payload
-                        // (8 monotonic_ns + 4 domain_id + 4 category_id + 4 event_name_id +
-                        //  4 correlation_id + 1 severity + 2 field_count + 4 name_id + 1 type_tag +
-                        //  3 reserved = 35, so type_tag is at index 32)
-                        assert!(payload.len() > 32, "AppendEvent payload too short");
-                        let type_tag = payload[32];
-                        assert_eq!(type_tag, 0x01, "Expected BOOL type tag 0x01");
-                        // Send AppendEventOk with event_sequence = 1
-                        let response = [9u8, 0x83, 1, 0, 0, 0, 0, 0, 0, 0];
-                        stream.write_all(&response).unwrap();
-                    }
-                    0x04 => {
-                        // FinishSession: send FinishSessionOk
-                        let response = [1u8, 0x84];
-                        stream.write_all(&response).unwrap();
-                        *server_done_clone.lock().unwrap() = true;
-                        break;
-                    }
-                    _ => {
-                        break;
-                    }
-                }
-            }
-            stream.shutdown(Shutdown::Both).ok();
-        }
-    });
-
-    // Give server time to start
-    thread::sleep(std::time::Duration::from_millis(50));
-
-    // Create config with socket path
-    let config = Config {
-        socket_path: Some(PathBuf::from(&socket_path_str)),
-        agent_path: None,
+#[cfg(test)]
+mod tests {
+    use crate::protocol::{
+        read_append_event_ok, read_error_frame, read_finish_session_ok_or_error, read_frame,
+        read_hello_ok, read_hello_ok_or_error, read_intern_ok, read_open_session_ok,
+        read_open_session_ok_or_error, write_append_event, write_finish_session, write_frame,
+        write_hello, write_intern, write_open_session, OpenSessionPayload, OPCODE_ERROR,
+        OPCODE_FINISH_SESSION, OPCODE_FINISH_SESSION_OK, OPCODE_HELLO, OPCODE_HELLO_OK,
+        OPCODE_INTERN, OPCODE_INTERN_OK, OPCODE_OPEN_SESSION, OPCODE_OPEN_SESSION_OK,
+        PROTOCOL_VERSION,
     };
+    use std::io::{Cursor, Read};
 
-    // Open session
-    let mut session = Session::open_strict(&config).expect("open_strict should succeed");
-    assert!(!session.closed, "Session should not be closed after open");
+    // =====================================================================
+    // Frame tests
+    // =====================================================================
 
-    // Emit a bool event
-    let emit_result = session.emit("test.domain", "test.category", "test_event", "enabled", true);
-    assert!(emit_result.is_ok(), "emit should succeed");
+    #[test]
+    fn test_frame_write_read_exact_bytes() {
+        // Write frame and verify exact wire bytes
+        let mut buf = Vec::new();
+        write_frame(&mut buf, 0x42, b"hello").unwrap();
 
-    // Close session
-    let close_result = session.close();
-    assert!(close_result.is_ok(), "close should succeed");
-    assert!(session.closed, "Session should be closed after close");
+        // 4-byte length (little-endian) + opcode + payload
+        // length = 1 (opcode) + 5 (payload) = 6
+        assert_eq!(&buf[0..4], &6u32.to_le_bytes());
+        assert_eq!(buf[4], 0x42);
+        assert_eq!(&buf[5..], b"hello");
 
-    // Second close should be idempotent
-    let second_close = session.close();
-    assert!(second_close.is_ok(), "second close should be idempotent and return Ok");
-
-    // Verify opcode order
-    let log = opcode_log.lock().unwrap();
-    assert_eq!(log.len(), 7, "Expected 7 opcodes: Hello, OpenSession, 4xIntern, AppendEvent, FinishSession");
-    assert_eq!(log[0], 0x01, "First opcode should be Hello");
-    assert_eq!(log[1], 0x02, "Second opcode should be OpenSession");
-    for i in 0..4 {
-        assert_eq!(log[2 + i], 0x06, "Opcodes 2-5 should be Intern");
+        // Read it back
+        let mut cursor = Cursor::new(buf);
+        let (opcode, payload) = read_frame(&mut cursor).unwrap();
+        assert_eq!(opcode, 0x42);
+        assert_eq!(payload, b"hello");
     }
-    assert_eq!(log[6], 0x04, "Last opcode should be FinishSession");
 
-    server.join().ok();
-    assert!(*server_done.lock().unwrap(), "Server should have completed");
-}
+    #[test]
+    fn test_frame_zero_length_rejected() {
+        let mut buf = Vec::new();
+        // Manually write a zero-length frame (invalid)
+        buf.extend_from_slice(&0u32.to_le_bytes()); // length = 0
 
-/// Error frame test: mock server returns Error after Hello, open_strict returns Error::Protocol
-#[test]
-fn mock_error_after_hello() {
-    // Create a temp directory with socket path
-    let temp_dir = tempfile::tempdir().unwrap();
-    let socket_path = temp_dir.path().join("dtj-agent-error.sock");
-    let socket_path_str = socket_path.to_str().unwrap().to_string();
+        let mut cursor = Cursor::new(buf);
+        let result = read_frame(&mut cursor);
+        assert!(result.is_err());
+    }
 
-    // Create UnixListener
-    let listener = UnixListener::bind(&socket_path).unwrap();
-    listener.set_nonblocking(true).ok();
+    #[test]
+    fn test_frame_too_large_rejected() {
+        let mut buf = Vec::new();
+        // Write frame with length > 1 MiB
+        let large_len: u32 = 1024 * 1024 + 1;
+        buf.extend_from_slice(&large_len.to_le_bytes());
 
-    let server_done = Arc::new(Mutex::new(false));
-    let server_done_clone = server_done.clone();
+        let mut cursor = Cursor::new(buf);
+        let result = read_frame(&mut cursor);
+        assert!(result.is_err());
+    }
 
-    let server = thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
-            loop {
-                // Read 4-byte length
-                let mut len_buf = [0u8; 4];
-                match stream.read_exact(&mut len_buf) {
-                    Ok(_) => {}
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(std::time::Duration::from_micros(100));
-                        continue;
-                    }
-                    Err(_) => break,
-                }
+    // =====================================================================
+    // Hello tests
+    // =====================================================================
 
-                let len = u32::from_le_bytes(len_buf) as usize;
-                if len == 0 || len > 1024 * 1024 {
-                    break;
-                }
+    #[test]
+    fn test_hello_exact_wire_format() {
+        let mut buf = Vec::new();
+        write_hello(&mut buf).unwrap();
 
-                let mut frame = vec![0u8; len];
-                if stream.read_exact(&mut frame).is_err() {
-                    break;
-                }
+        // Frame: 4-byte len + opcode + 4-byte version
+        // len = 1 + 4 = 5
+        assert_eq!(&buf[0..4], &5u32.to_le_bytes());
+        assert_eq!(buf[4], OPCODE_HELLO);
+        assert_eq!(&buf[5..9], &PROTOCOL_VERSION.to_le_bytes());
+    }
 
-                let opcode = frame[0];
+    #[test]
+    fn test_hello_ok_version_mismatch() {
+        // Write HelloOk with wrong version
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_HELLO_OK, &2u32.to_le_bytes()).unwrap(); // version 2
 
-                if opcode == 0x01 {
-                    // Hello: send Error frame instead of HelloOk
-                    let error_msg = b"Unsupported version";
-                    let payload_len = 1 + error_msg.len();
-                    let mut error_frame = Vec::with_capacity(4 + payload_len);
-                    error_frame.extend_from_slice(&(payload_len as u32).to_le_bytes());
-                    error_frame.push(0xFF); // Error opcode
-                    error_frame.extend_from_slice(error_msg);
-                    stream.write_all(&error_frame).unwrap();
-                    *server_done_clone.lock().unwrap() = true;
-                    break;
-                }
-            }
-            stream.shutdown(Shutdown::Both).ok();
-        }
-    });
+        let mut cursor = Cursor::new(buf);
+        let result = read_hello_ok(&mut cursor);
+        assert!(result.is_err()); // BadVersion
+    }
 
-    // Give server time to start
-    thread::sleep(std::time::Duration::from_millis(50));
+    #[test]
+    fn test_hello_error_frame() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_ERROR, b"unsupported").unwrap();
 
-    // Try to open session - should get Error::Protocol
-    let config = Config {
-        socket_path: Some(PathBuf::from(&socket_path_str)),
-        agent_path: None,
-    };
+        let mut cursor = Cursor::new(buf);
+        let result = read_hello_ok_or_error(&mut cursor).unwrap();
+        assert!(!result); // false = error received
+    }
 
-    let result = Session::open_strict(&config);
+    #[test]
+    fn test_hello_unknown_opcode_rejected() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, 0x99, &[]).unwrap(); // Unknown opcode
 
-    // Expect Protocol error since server sent Error frame
-    assert!(result.is_err(), "open_strict should fail when server sends Error");
-    assert_eq!(result.unwrap_err(), Error::Protocol, "Should return Error::Protocol");
+        let mut cursor = Cursor::new(buf);
+        let result = read_hello_ok_or_error(&mut cursor);
+        assert!(result.is_err());
+    }
 
-    server.join().ok();
-    assert!(*server_done.lock().unwrap(), "Server should have completed");
+    // =====================================================================
+    // OpenSession tests
+    // =====================================================================
+
+    #[test]
+    fn test_open_session_payload_encoding() {
+        let payload = OpenSessionPayload {
+            file_name: "test.dtj".to_string(),
+            session_id: [0x11u8; 16],
+            start_utc_unix_ms: 0x1234567890abcdef_i64,
+            mono_origin_ns: 0xFEDCBA9876543210_u64,
+            producer_name: "myproducer".to_string(),
+            producer_version: "2.0".to_string(),
+        };
+
+        let mut buf = Vec::new();
+        write_open_session(&mut buf, &payload).unwrap();
+
+        // Parse and verify exact bytes
+        let mut cursor = Cursor::new(buf);
+
+        // Read frame header
+        let (opcode, frame_payload) = read_frame(&mut cursor).unwrap();
+        assert_eq!(opcode, OPCODE_OPEN_SESSION);
+
+        // Parse payload
+        let mut p = frame_payload.as_slice();
+
+        // file_name: u16 len + bytes
+        let file_len = {
+            let mut len_buf = [0u8; 2];
+            p.read_exact(&mut len_buf).unwrap();
+            u16::from_le_bytes(len_buf) as usize
+        };
+        let mut file_name_buf = vec![0u8; file_len];
+        p.read_exact(&mut file_name_buf).unwrap();
+        assert_eq!(String::from_utf8(file_name_buf).unwrap(), "test.dtj");
+
+        // session_id: 16 bytes
+        let mut session_id_buf = [0u8; 16];
+        p.read_exact(&mut session_id_buf).unwrap();
+        assert_eq!(session_id_buf, [0x11u8; 16]);
+
+        // start_utc_unix_ms: i64
+        let mut ts_buf = [0u8; 8];
+        p.read_exact(&mut ts_buf).unwrap();
+        assert_eq!(i64::from_le_bytes(ts_buf), payload.start_utc_unix_ms);
+
+        // mono_origin_ns: u64
+        let mut mono_buf = [0u8; 8];
+        p.read_exact(&mut mono_buf).unwrap();
+        assert_eq!(u64::from_le_bytes(mono_buf), payload.mono_origin_ns);
+
+        // producer_name: u16 len + bytes
+        let name_len = {
+            let mut len_buf = [0u8; 2];
+            p.read_exact(&mut len_buf).unwrap();
+            u16::from_le_bytes(len_buf) as usize
+        };
+        let mut name_buf = vec![0u8; name_len];
+        p.read_exact(&mut name_buf).unwrap();
+        assert_eq!(String::from_utf8(name_buf).unwrap(), "myproducer");
+
+        // producer_version: u16 len + bytes
+        let ver_len = {
+            let mut len_buf = [0u8; 2];
+            p.read_exact(&mut len_buf).unwrap();
+            u16::from_le_bytes(len_buf) as usize
+        };
+        let mut ver_buf = vec![0u8; ver_len];
+        p.read_exact(&mut ver_buf).unwrap();
+        assert_eq!(String::from_utf8(ver_buf).unwrap(), "2.0");
+    }
+
+    #[test]
+    fn test_open_session_ok_empty_payload() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_OPEN_SESSION_OK, &[]).unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let result = read_open_session_ok(&mut cursor);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_open_session_error_frame() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_ERROR, b"session failed").unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let result = read_open_session_ok_or_error(&mut cursor).unwrap();
+        assert!(!result);
+    }
+
+    // =====================================================================
+    // Intern tests
+    // =====================================================================
+
+    #[test]
+    fn test_intern_exact_wire_format() {
+        let mut buf = Vec::new();
+        write_intern(&mut buf, 1, "mydomain").unwrap();
+
+        // Parse frame
+        let mut cursor = Cursor::new(buf);
+        let (opcode, payload) = read_frame(&mut cursor).unwrap();
+        assert_eq!(opcode, OPCODE_INTERN);
+        assert_eq!(payload.len(), 1 + 2 + 8); // dict_kind + len(2) + "mydomain"
+
+        // dict_kind = 1
+        assert_eq!(payload[0], 1);
+        // string len = 8 (u16 le)
+        assert_eq!(&payload[1..3], &8u16.to_le_bytes());
+        // string bytes
+        assert_eq!(&payload[3..], b"mydomain");
+    }
+
+    #[test]
+    fn test_intern_ok_response() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_INTERN_OK, &42u32.to_le_bytes()).unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let id = read_intern_ok(&mut cursor).unwrap();
+        assert_eq!(id, 42);
+    }
+
+    #[test]
+    fn test_intern_wrong_opcode_rejected() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_ERROR, b"error").unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let result = read_intern_ok(&mut cursor);
+        assert!(result.is_err());
+    }
+
+    // =====================================================================
+    // AppendEvent tests
+    // =====================================================================
+
+    #[test]
+    fn test_append_event_encoding() {
+        let mut buf = Vec::new();
+        write_append_event(
+            &mut buf,
+            0x1122334455667788_u64, // monotonic_ns
+            1,
+            2,
+            3,
+            4,                             // domain, category, event_name, correlation IDs
+            0x01,                          // severity: Info
+            5,                             // field_name_id
+            0x02,                          // type_tag
+            &0xAABBCCDD_u64.to_le_bytes(), // value
+        )
+        .unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let (opcode, payload) = read_frame(&mut cursor).unwrap();
+        assert_eq!(opcode, 0x03);
+
+        // Verify payload layout
+        let mut p = payload.as_slice();
+
+        // monotonic_ns: 8 bytes
+        let mut ts_buf = [0u8; 8];
+        p.read_exact(&mut ts_buf).unwrap();
+        assert_eq!(u64::from_le_bytes(ts_buf), 0x1122334455667788_u64);
+
+        // domain_id, category_id, event_name_id, correlation_id: 4 bytes each
+        let mut id_buf = [0u8; 4];
+        p.read_exact(&mut id_buf).unwrap();
+        assert_eq!(u32::from_le_bytes(id_buf), 1);
+        p.read_exact(&mut id_buf).unwrap();
+        assert_eq!(u32::from_le_bytes(id_buf), 2);
+        p.read_exact(&mut id_buf).unwrap();
+        assert_eq!(u32::from_le_bytes(id_buf), 3);
+        p.read_exact(&mut id_buf).unwrap();
+        assert_eq!(u32::from_le_bytes(id_buf), 4);
+
+        // severity: 1 byte
+        let mut sev_buf = [0u8; 1];
+        p.read_exact(&mut sev_buf).unwrap();
+        assert_eq!(sev_buf[0], 0x01);
+
+        // field_count: 2 bytes (should be 1)
+        let mut fc_buf = [0u8; 2];
+        p.read_exact(&mut fc_buf).unwrap();
+        assert_eq!(u16::from_le_bytes(fc_buf), 1);
+
+        // field_name_id: 4 bytes
+        p.read_exact(&mut id_buf).unwrap();
+        assert_eq!(u32::from_le_bytes(id_buf), 5);
+
+        // type_tag: 1 byte
+        let mut tt_buf = [0u8; 1];
+        p.read_exact(&mut tt_buf).unwrap();
+        assert_eq!(tt_buf[0], 0x02);
+
+        // reserved: 3 bytes
+        p.read_exact(&mut &mut [0u8; 3][..]).unwrap();
+
+        // value_body: remaining bytes
+        let mut value_buf = vec![0u8; p.len()];
+        p.read_exact(&mut value_buf).unwrap();
+        assert_eq!(value_buf, &0xAABBCCDD_u64.to_le_bytes());
+    }
+
+    #[test]
+    fn test_append_event_ok_response() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, 0x83, &99u64.to_le_bytes()).unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let seq = read_append_event_ok(&mut cursor).unwrap();
+        assert_eq!(seq, 99);
+    }
+
+    // =====================================================================
+    // FinishSession tests
+    // =====================================================================
+
+    #[test]
+    fn test_finish_session_exact_wire_format() {
+        let mut buf = Vec::new();
+        write_finish_session(&mut buf).unwrap();
+
+        // len = 1 (opcode) + 0 (payload) = 1
+        assert_eq!(&buf[0..4], &1u32.to_le_bytes());
+        assert_eq!(buf[4], OPCODE_FINISH_SESSION);
+    }
+
+    #[test]
+    fn test_finish_session_ok_empty_payload() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_FINISH_SESSION_OK, &[]).unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let result = read_finish_session_ok_or_error(&mut cursor).unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn test_finish_session_error_frame() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_ERROR, b"closed").unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let result = read_finish_session_ok_or_error(&mut cursor).unwrap();
+        assert!(!result);
+    }
+
+    // =====================================================================
+    // Error frame tests
+    // =====================================================================
+
+    #[test]
+    fn test_error_frame_parsing() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, OPCODE_ERROR, b"something went wrong").unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let msg = read_error_frame(&mut cursor).unwrap();
+        assert_eq!(msg, "something went wrong");
+    }
 }

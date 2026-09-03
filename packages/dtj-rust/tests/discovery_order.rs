@@ -107,8 +107,8 @@ fn test_open_fallback_to_disabled() {
         warning_handler: None,
     };
 
-    // open() should not panic, should return a disabled session
-    let _session = Session::open_strict(&config).unwrap();
+    // open() should not panic, should return a disabled session (fallback behavior)
+    let _session = Session::open(&config).unwrap();
     // The session should be created but in disabled state
     // (because connection failed)
     assert!(true); // If we get here without panic, test passes
