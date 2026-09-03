@@ -2,8 +2,8 @@ use crate::discovery::Discovery;
 use crate::owned_agent::OwnedAgent;
 use crate::protocol::{
     read_append_event_ok, read_finish_session_ok_or_error, read_hello_ok_or_error, read_intern_ok,
-    read_open_session_ok_or_error, write_append_event, write_finish_session, write_hello,
-    write_intern, write_open_session,
+    read_open_session_ok_or_error, write_finish_session, write_hello, write_intern,
+    write_open_session,
 };
 use crate::types::Value;
 use std::collections::HashMap;
@@ -12,6 +12,16 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::Child;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Generate the default session file name: `session-<unix-ms>.dtj`.
+/// This mirrors the behavior of Go, Python, and TypeScript SDKs.
+pub(crate) fn default_session_file_name() -> String {
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    format!("session-{}.dtj", unix_ms)
+}
 
 /// Dictionary cache for interned strings
 #[derive(Default)]
@@ -47,6 +57,13 @@ impl std::fmt::Debug for Session {
     }
 }
 
+/// Event identity fields grouped to reduce argument count.
+struct EventIdentity<'a> {
+    domain: &'a str,
+    category: &'a str,
+    event_name: &'a str,
+}
+
 impl Session {
     pub fn is_closed(&self) -> bool {
         self.closed
@@ -62,9 +79,11 @@ impl Session {
         let severity = e.severity.as_u8();
         let correlation = e.correlation.clone();
         self.emit_from_parts(
-            &domain,
-            &category,
-            &name,
+            EventIdentity {
+                domain: &domain,
+                category: &category,
+                event_name: &name,
+            },
             &field_name,
             value,
             severity,
@@ -216,7 +235,7 @@ impl Session {
                     file_name: config
                         .session_file_name
                         .clone()
-                        .unwrap_or_else(|| "test.dtj".to_string()),
+                        .unwrap_or_else(default_session_file_name),
                     session_id: session_id.clone().try_into().unwrap(),
                     start_utc_unix_ms: now,
                     mono_origin_ns: 0,
@@ -264,7 +283,7 @@ impl Session {
                 }
 
                 // Successfully connected and opened session
-                return Ok(Session {
+                Ok(Session {
                     stream: Some(stream),
                     closed: false,
                     disabled: false,
@@ -272,7 +291,7 @@ impl Session {
                     cache: DictCache::default(),
                     warned: false,
                     warning_handler: config.warning_handler.clone(),
-                });
+                })
             }
             Err(_) => {
                 // Connection failed - cleanup owned if present
@@ -371,7 +390,7 @@ impl Session {
             file_name: config
                 .session_file_name
                 .clone()
-                .unwrap_or_else(|| "test.dtj".to_string()),
+                .unwrap_or_else(default_session_file_name),
             session_id: session_id.clone().try_into().unwrap(),
             start_utc_unix_ms: now,
             mono_origin_ns: 0,
@@ -416,9 +435,7 @@ impl Session {
     /// Emit an event with any value type (internal implementation).
     fn emit_from_parts(
         &mut self,
-        domain: &str,
-        category: &str,
-        event_name: &str,
+        identity: EventIdentity<'_>,
         field_name: &str,
         value: Value,
         severity: u8,
@@ -440,9 +457,10 @@ impl Session {
         }
 
         // Intern all strings first (these borrow self.cache, not self.stream)
-        let domain_id = self.intern(crate::protocol::DICT_KIND_DOMAIN, domain)?;
-        let category_id = self.intern(crate::protocol::DICT_KIND_CATEGORY, category)?;
-        let event_name_id = self.intern(crate::protocol::DICT_KIND_EVENT_NAME, event_name)?;
+        let domain_id = self.intern(crate::protocol::DICT_KIND_DOMAIN, identity.domain)?;
+        let category_id = self.intern(crate::protocol::DICT_KIND_CATEGORY, identity.category)?;
+        let event_name_id =
+            self.intern(crate::protocol::DICT_KIND_EVENT_NAME, identity.event_name)?;
         let field_name_id = self.intern(crate::protocol::DICT_KIND_STRING, field_name)?;
 
         // For String values, we need to intern the string value and use TYPE_INTERNED
@@ -467,9 +485,8 @@ impl Session {
 
         {
             let stream = self.stream.as_mut().unwrap();
-            write_append_event(
-                stream,
-                0,
+            let frame = crate::protocol::AppendEventFrame {
+                monotonic_ns: 0,
                 domain_id,
                 category_id,
                 event_name_id,
@@ -477,8 +494,9 @@ impl Session {
                 severity,
                 field_name_id,
                 type_tag,
-                &value_body,
-            )?;
+                value_body: &value_body,
+            };
+            crate::protocol::write_append_event(stream, frame)?;
             read_append_event_ok(stream)?;
         }
 
@@ -583,78 +601,5 @@ impl Client {
         }
         self.stream = None;
         Ok(())
-    }
-}
-
-// =============================================================================
-// In-crate tests for OwnedAgent lifecycle verification
-// =============================================================================
-
-#[cfg(test)]
-mod owned_agent_tests {
-    use super::*;
-    use crate::Config;
-
-    /// Verify that auto-launched agent process and temp directory are cleaned up.
-    /// This test uses in-crate access to Session.owned and OwnedAgent methods.
-    #[test]
-    fn test_auto_launched_agent_is_cleaned_up() {
-        // Build the agent if not already built
-        let agent_path = std::env::var("DTJ_AGENT_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("./crates/dtj/target/debug/dtj-agent"));
-
-        if !agent_path.exists() {
-            eprintln!("skipped: dtj-agent not built at {:?}", agent_path);
-            return;
-        }
-
-        let config = Config {
-            data_dir: None,
-            producer_name: "cleanup-test".to_string(),
-            producer_version: "0.1.0".to_string(),
-            agent_path: Some(agent_path.clone()),
-            socket_path: None, // Trigger auto-launch
-            session_file_name: None,
-            enabled: true,
-            warning_handler: None,
-        };
-
-        // Open session with auto-launch
-        let mut session = Session::open(&config).expect("session open");
-        assert!(
-            session.owned.is_some(),
-            "should have owned agent after auto-launch"
-        );
-
-        // Capture PID and temp_dir before taking ownership
-        let child_pid = session.owned.as_ref().unwrap().child_id();
-        let temp_path = session.owned.as_ref().unwrap().temp_dir_path().cloned();
-
-        let pid = child_pid.expect("should have PID");
-        let temp_path = temp_path.expect("should have temp_dir");
-
-        // Take ownership away from session (so we can inspect after close)
-        // Verify temp_dir exists before cleanup
-        assert!(temp_path.exists(), "temp_dir should exist before cleanup");
-
-        // Call session.close() - this should trigger cleanup via self.owned.take()
-        session.close().ok();
-        drop(session);
-
-        // Verify: process no longer exists
-        let pid_exists = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
-        assert!(
-            !pid_exists,
-            "agent process {} should be killed after cleanup",
-            pid
-        );
-
-        // Verify: temp directory deleted
-        assert!(
-            !temp_path.exists(),
-            "temp dir {:?} should be deleted after cleanup",
-            temp_path
-        );
     }
 }

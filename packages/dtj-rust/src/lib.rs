@@ -28,7 +28,7 @@ pub struct Config {
     pub agent_path: Option<PathBuf>,
     /// Optional explicit socket path. If set, no agent process is spawned.
     pub socket_path: Option<PathBuf>,
-    /// Session file name (default: session-<unix-ms>.dtj)
+    /// Session file name (default: `session-<unix-ms>.dtj`)
     pub session_file_name: Option<String>,
     /// Enable/disable the SDK. When disabled, emit/close are no-ops.
     pub enabled: bool,

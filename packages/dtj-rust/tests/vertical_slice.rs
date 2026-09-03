@@ -103,7 +103,7 @@ fn make_config(socket_path: &std::path::Path) -> Config {
         producer_version: "0.1.0".to_string(),
         agent_path: None,
         socket_path: Some(std::path::PathBuf::from(socket_path)),
-        session_file_name: None,
+        session_file_name: Some("test.dtj".into()),
         enabled: true,
         warning_handler: None,
     }
@@ -392,11 +392,15 @@ fn test_all_value_types() {
         (Value::Bool(true), 0x01u8, vec![1u8]),
         (Value::Int(-42i64), 0x03u8, (-42i64).to_le_bytes().to_vec()),
         (Value::UInt(42u64), 0x05u8, 42u64.to_le_bytes().to_vec()),
-        (Value::F32(3.14f32), 0x06u8, 3.14f32.to_le_bytes().to_vec()),
         (
-            Value::F64(2.718281828f64),
+            Value::F32(std::f32::consts::PI),
+            0x06u8,
+            std::f32::consts::PI.to_le_bytes().to_vec(),
+        ),
+        (
+            Value::F64(std::f64::consts::E),
             0x07u8,
-            2.718281828f64.to_le_bytes().to_vec(),
+            std::f64::consts::E.to_le_bytes().to_vec(),
         ),
     ];
 
@@ -649,8 +653,7 @@ fn test_error_after_intern() {
 
     server_handle.join().unwrap();
 
-    if result.is_ok() {
-        let mut session = result.unwrap();
+    if let Ok(mut session) = result {
         let emit_result = session.emit(&Event {
             domain: "t".to_string(),
             category: "t".to_string(),

@@ -39,12 +39,12 @@ fn main() {
 
 ```rust
 let config = Config {
-    data_dir: None,              // Agent's data directory (discovered or /tmp)
+    data_dir: None,              // None → ./traces relative to current working directory
     producer_name: "my-app".to_string(),
     producer_version: "1.0.0".to_string(),
     agent_path: None,           // Path to dtj-agent binary (optional, uses discovery)
     socket_path: None,          // Unix socket path (discovered or discovered)
-    session_file_name: None,    // Custom session file name (optional)
+    session_file_name: None,    // None → session-<unix-ms>.dtj
     enabled: true,              // Set to false to disable (no-op mode)
     warning_handler: None,      // Custom warning handler (optional)
 };
@@ -52,39 +52,78 @@ let config = Config {
 
 ### Config Defaults
 
-| Field | Default |
-|-------|---------|
-| `data_dir` | Discovered from environment or `/tmp` |
-| `producer_name` | `"unknown"` |
-| `producer_version` | `"0.0.0"` |
-| `agent_path` | None (uses discovery) |
-| `socket_path` | Discovered from environment or `DTJ_SOCKET` |
-| `session_file_name` | Auto-generated UUID |
-| `enabled` | `true` |
-| `warning_handler` | None (warnings logged to stderr) |
+| Field | Config value | Effective fallback |
+|-------|-------------|-------------------|
+| `data_dir` | `None` | `./traces` relative to current working directory |
+| `producer_name` | `"dtj-rust"` | — |
+| `producer_version` | `"0.1.0"` | — |
+| `agent_path` | `None` | Uses discovery |
+| `socket_path` | `None` | Uses discovery |
+| `session_file_name` | `None` | `session-<unix-ms>.dtj` |
+| `enabled` | `true` | — |
+| `warning_handler` | `None` | — |
 
-## Modes: no-op vs strict
+### Config Validation
 
-- **no-op mode** (`enabled = false`): All operations succeed without doing anything
-- **strict mode** (`enabled = true`): Connects to dtj-agent via Unix socket
+`Config::validate()` checks two constraints before any discovery or socket connection:
+
+- `producer_name` ≤ 32 bytes — returns `Error::BadLength` otherwise
+- `session_file_name` must not contain `..` (path traversal) or start with `/` — returns `Error::BadName` otherwise
+
+`Session::open_strict` calls `validate()` first and propagates errors as `Err(...)`. Use it for fail-fast configuration checking during application startup.
+
+`Session::open` does not call `validate()` — configuration errors are silently absorbed into the disabled session.
+
+## Session Opening
+
+The SDK has two session constructors with distinct error semantics:
+
+### `Session::open(config)` — graceful fallback
+
+- Validates `config.enabled` only; does **not** validate producer name length or session file name.
+- On discovery failure, connection failure, or handshake failure: calls the warning handler (if set) and returns a **disabled/no-op session**.
+- The returned session is fully functional — `emit()` becomes a no-op, `close()` is a no-op.
+- Use when instrumentation must **not** break the host application.
+
+### `Session::open_strict(config)` — strict mode
+
+- Runs `Config::validate()` **first** (producer name ≤ 32 bytes, no path traversal in session file name).
+- On any failure — validation, discovery, connection, or handshake — returns `Err(...)`.
+- Does **not** fall back to a disabled session.
+- Use when SDK or agent failures must be **observable as errors** by the caller.
 
 ```rust
-// no-op mode - useful for testing or when tracing is disabled
-let config = Config {
-    enabled: false,
-    ..Default::default()
-};
-let session = Session::open_strict(&config).unwrap(); // Always succeeds
+// Graceful: application continues even if agent is unavailable
+let session = Session::open(&config); // always Ok(Session)
+
+// Strict: caller must handle errors explicitly
+let session = Session::open_strict(&config)?; // Err(Error) propagates
+
+// no-op mode — events are silently discarded
+let config = Config { enabled: false, ..Default::default() };
+let session = Session::open(&config).unwrap(); // always succeeds
 ```
 
-## Discovery Order
+## Discovery Modes
 
-The SDK discovers the agent socket in this order:
+The SDK has two distinct modes:
 
-1. `Config.socket_path` if explicitly set
-2. `DTJ_SOCKET` environment variable
-3. `DTJ_DATA_DIR` environment variable + default socket name
-4. `/tmp` directory + default socket name
+### Explicit external socket
+
+If `Config.socket_path` is set, the SDK connects to that socket directly. The agent process is **external** — the SDK does not spawn, own, kill, or clean up the agent process or its socket directory.
+
+### Agent discovery and auto-launch
+
+If `Config.socket_path` is not set, the SDK searches for the `dtj-agent` binary and launches it automatically:
+
+1. `Config.agent_path` if set
+2. `DTJ_AGENT_PATH` environment variable
+3. `dtj-agent` in `PATH`
+4. macOS fallback paths: `/opt/homebrew/bin/dtj-agent`, `/usr/local/bin/dtj-agent`, `~/.cargo/bin/dtj-agent`
+
+When the SDK auto-launches the agent, it creates a temporary directory for the agent's socket and data files. The SDK **owns** the agent process — `Session::close()` terminates the session and cleans up the spawned process and its temp directory. If `close()` is not called, `Drop` acts as a fallback cleanup path.
+
+The Rust SDK never writes `.dtj` files directly; `dtj-agent` is the sole writer.
 
 ## Value Types
 
@@ -110,9 +149,9 @@ Severity::Fatal // 4
 
 ## Platform Limitations
 
-- **Unix sockets only**: This SDK only works on Unix-like systems (Linux, macOS)
-- Requires `dtj-agent` running and accessible via socket path
-- Requires appropriate permissions to access the socket
+- **Unix only**: This SDK works on Unix-like systems (Linux, macOS). Windows is not supported.
+- **dtj-agent availability**: The agent binary or a Unix socket must be accessible. If `Config.socket_path` is set, the socket must exist. Otherwise, the SDK searches for `dtj-agent` and auto-launches it — see Discovery Modes above.
+- **Permissions**: the process must have access to the socket path and, when launching, execute permission on the agent binary.
 
 ## Testing
 
