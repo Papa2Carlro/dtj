@@ -603,3 +603,52 @@ impl Client {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::default_session_file_name;
+
+    /// Verify that the default session file name fallback matches the format
+    /// `session-<unix-ms>.dtj` agreed across Go, Python, and TypeScript SDKs.
+    #[test]
+    fn test_default_session_file_name_uses_unix_ms_format() {
+        let name = default_session_file_name();
+
+        // 1. Prefix: starts with "session-"
+        assert!(
+            name.starts_with("session-"),
+            "default filename should start with 'session-', got: {:?}",
+            name
+        );
+
+        // 2. Suffix: ends with ".dtj"
+        assert!(
+            name.ends_with(".dtj"),
+            "default filename should end with '.dtj', got: {:?}",
+            name
+        );
+
+        // 3. Middle: non-empty, all ASCII digits, parses as integer timestamp
+        let prefix_len = "session-".len();
+        let suffix_len = ".dtj".len();
+        let middle = &name[prefix_len..name.len() - suffix_len];
+        assert!(
+            !middle.is_empty(),
+            "default filename timestamp portion should be non-empty, got: {:?}",
+            name
+        );
+        assert!(
+            middle.chars().all(|c| c.is_ascii_digit()),
+            "default filename timestamp portion should be all ASCII digits, got: {:?}",
+            middle
+        );
+        let parsed: i64 = middle
+            .parse()
+            .expect("default filename timestamp portion should parse as i64");
+        assert!(
+            parsed > 0,
+            "default filename timestamp should be positive, got: {}",
+            parsed
+        );
+    }
+}

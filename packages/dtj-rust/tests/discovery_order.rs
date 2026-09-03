@@ -210,7 +210,10 @@ fn test_explicit_session_file_name_passed_unchanged() {
 
     // validate() should accept the explicit name without error
     let result = config.validate();
-    assert!(result.is_ok(), "explicit session_file_name should pass validation");
+    assert!(
+        result.is_ok(),
+        "explicit session_file_name should pass validation"
+    );
 }
 
 /// Test that discovery order is followed: Config.agent_path first
