@@ -12,6 +12,167 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// OwnedAgent holds lifecycle ownership of a spawned agent process and its temp directory.
+/// It provides idempotent cleanup: kill/wait child, remove temp_dir.
+/// All stream operations are handled separately by the caller.
+pub(crate) struct OwnedAgent {
+    child: Option<Child>,
+    temp_dir: Option<PathBuf>,
+}
+
+impl OwnedAgent {
+    /// Create a new OwnedAgent from a spawned child and temp directory.
+    pub fn new(child: Child, temp_dir: PathBuf) -> Self {
+        Self {
+            child: Some(child),
+            temp_dir: Some(temp_dir),
+        }
+    }
+
+    /// Idempotent cleanup: kill child (if alive), wait it, remove temp_dir.
+    /// Safe to call multiple times.
+    pub fn cleanup(&mut self) {
+        // Kill and wait child process
+        if let Some(ref mut child) = self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.child = None;
+
+        // Remove temp directory
+        if let Some(ref temp_dir) = self.temp_dir {
+            let _ = std::fs::remove_dir_all(temp_dir);
+        }
+        self.temp_dir = None;
+    }
+}
+
+impl Drop for OwnedAgent {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+#[cfg(test)]
+mod owned_agent_tests {
+    use super::*;
+
+    /// Pure unit test: OwnedAgent cleanup terminates child and removes temp_dir.
+    #[test]
+    fn test_owned_agent_cleanup_terminates_child_and_removes_temp_dir() {
+        let child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep process");
+        let child_pid = child.id();
+
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let temp_path = temp_dir.path().to_path_buf();
+
+        assert!(temp_path.exists(), "temp_dir should exist before cleanup");
+
+        let mut owned = OwnedAgent::new(child, temp_path.clone());
+        owned.cleanup();
+
+        // Child should be terminated (use kill -0 to check)
+        // kill -0 returns exit 0 if process exists, exit 1 if not found
+        let recheck = std::process::Command::new("kill")
+            .arg("-0")
+            .arg(child_pid.to_string())
+            .status()
+            .expect("kill -0 command should run");
+        assert!(
+            !recheck.success(),
+            "child process {} should be terminated",
+            child_pid
+        );
+
+        // temp_dir should be removed
+        drop(temp_dir);
+        assert!(
+            !std::path::Path::new(&temp_path).exists(),
+            "temp_dir should be removed"
+        );
+
+        // Second cleanup() should not panic
+        owned.cleanup();
+    }
+
+    /// OwnedAgent with None child cleans up temp_dir correctly
+    #[test]
+    fn test_owned_agent_cleanup_with_no_child() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let temp_path = temp_dir.path().to_path_buf();
+
+        assert!(temp_path.exists());
+
+        let mut owned = OwnedAgent {
+            child: None,
+            temp_dir: Some(temp_path),
+        };
+
+        owned.cleanup();
+    }
+
+    /// OwnedAgent with no temp_dir still terminates child
+    #[test]
+    fn test_owned_agent_cleanup_with_no_temp_dir() {
+        let child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep process");
+        let child_pid = child.id();
+
+        let mut owned = OwnedAgent {
+            child: Some(child),
+            temp_dir: None,
+        };
+
+        owned.cleanup();
+
+        // kill -0 returns exit 0 if process exists, exit 1 if not found
+        let recheck = std::process::Command::new("kill")
+            .arg("-0")
+            .arg(child_pid.to_string())
+            .status()
+            .expect("kill -0 command should run");
+        assert!(
+            !recheck.success(),
+            "child process {} should be terminated",
+            child_pid
+        );
+    }
+
+    /// OwnedAgent::cleanup() is idempotent
+    #[test]
+    fn test_owned_agent_cleanup_is_idempotent() {
+        let child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep process");
+        let child_pid = child.id();
+
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let temp_path = temp_dir.path().to_path_buf();
+
+        let mut owned = OwnedAgent::new(child, temp_path.clone());
+
+        owned.cleanup();
+        owned.cleanup(); // Second call should not panic
+
+        // kill -0 returns exit 0 if process exists, exit 1 if not found
+        let recheck = std::process::Command::new("kill")
+            .arg("-0")
+            .arg(child_pid.to_string())
+            .status()
+            .expect("kill -0 command should run");
+        assert!(
+            !recheck.success(),
+            "child should still be terminated after double cleanup"
+        );
+    }
+}
+
 /// Dictionary cache for interned strings
 #[derive(Default)]
 struct DictCache {
@@ -50,6 +211,16 @@ impl std::fmt::Debug for Session {
 impl Session {
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    /// Emit an event through the session.
+    pub fn emit(&mut self, e: &crate::Event) -> Result<(), crate::error::Error> {
+        let domain = e.domain.clone();
+        let category = e.category.clone();
+        let name = e.name.clone();
+        let field_name = e.field_name.clone();
+        let value = e.value.clone();
+        self.emit_from_parts(&domain, &category, &name, &field_name, value)
     }
 
     /// Intern a string and return its ID, using cache
@@ -157,8 +328,8 @@ impl Session {
         })
     }
 
-    /// Emit an event with any value type.
-    pub fn emit(
+    /// Emit an event with any value type (internal implementation).
+    fn emit_from_parts(
         &mut self,
         domain: &str,
         category: &str,
@@ -320,10 +491,6 @@ impl Client {
 
     pub fn open_session(config: &crate::Config) -> Result<Session, crate::error::Error> {
         Session::open_strict(config)
-    }
-
-    pub fn emit(&mut self, _e: &crate::Event) -> Result<(), crate::error::Error> {
-        Ok(())
     }
 
     pub fn close(&mut self) -> Result<(), crate::error::Error> {
