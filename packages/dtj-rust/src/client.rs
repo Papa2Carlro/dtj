@@ -1,4 +1,5 @@
 use crate::discovery::Discovery;
+use crate::owned_agent::OwnedAgent;
 use crate::protocol::{
     read_append_event_ok, read_finish_session_ok_or_error, read_hello_ok_or_error, read_intern_ok,
     read_open_session_ok_or_error, write_append_event, write_finish_session, write_hello,
@@ -11,61 +12,6 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::Child;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/// OwnedAgent holds lifecycle ownership of a spawned agent process and its temp directory.
-/// It provides idempotent cleanup: kill/wait child, remove temp_dir.
-/// All stream operations are handled separately by the caller.
-///
-/// NOTE: Public for test access - this is an internal implementation detail.
-pub struct OwnedAgent {
-    child: Option<Child>,
-    temp_dir: Option<PathBuf>,
-}
-
-impl OwnedAgent {
-    /// Create a new OwnedAgent from a spawned child and temp directory.
-    pub fn new(child: Child, temp_dir: PathBuf) -> Self {
-        Self {
-            child: Some(child),
-            temp_dir: Some(temp_dir),
-        }
-    }
-
-    /// Idempotent cleanup: kill child (if alive), wait it, remove temp_dir.
-    /// Safe to call multiple times.
-    pub fn cleanup(&mut self) {
-        if let Some(ref mut child) = self.child {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        self.child = None;
-        if let Some(ref temp_dir) = self.temp_dir {
-            let _ = std::fs::remove_dir_all(temp_dir);
-        }
-        self.temp_dir = None;
-    }
-
-    /// Returns the child's PID if still held.
-    pub fn child_id(&self) -> Option<u32> {
-        self.child.as_ref().map(|c| c.id())
-    }
-
-    /// Returns the temp_dir path if still held.
-    pub fn temp_dir_path(&self) -> Option<&PathBuf> {
-        self.temp_dir.as_ref()
-    }
-
-    /// Returns true if cleanup has been called (child and temp_dir are None).
-    pub fn is_cleaned_up(&self) -> bool {
-        self.child.is_none() && self.temp_dir.is_none()
-    }
-}
-
-impl Drop for OwnedAgent {
-    fn drop(&mut self) {
-        self.cleanup();
-    }
-}
 
 /// Dictionary cache for interned strings
 #[derive(Default)]
@@ -104,19 +50,6 @@ impl std::fmt::Debug for Session {
 impl Session {
     pub fn is_closed(&self) -> bool {
         self.closed
-    }
-
-    /// Returns true if the session owns an auto-launched agent (test helper).
-    /// NOTE: This method is only available when compiling tests.
-    pub fn _has_owned_agent_for_test(&self) -> bool {
-        self.owned.is_some()
-    }
-
-    /// Takes ownership of the owned agent, returning it for inspection (test helper).
-    /// After this, the session no longer owns the agent (cleanup won't be called on Drop).
-    /// NOTE: This method is only available when compiling tests.
-    pub fn _take_owned_agent_for_test(&mut self) -> Option<OwnedAgent> {
-        self.owned.take()
     }
 
     /// Emit an event through the session.
@@ -225,11 +158,8 @@ impl Session {
             }
         };
 
-        // Create OwnedAgent if we auto-launched; None for explicit socket_path
-        let mut owned = match (discovery.child, discovery.temp_dir) {
-            (Some(child), Some(temp_dir)) => Some(OwnedAgent::new(child, temp_dir)),
-            _ => None,
-        };
+        // Transfer ownership from discovery
+        let mut owned = discovery.owned;
 
         // Try to connect
         match UnixStream::connect(&socket_path) {
@@ -393,11 +323,8 @@ impl Session {
             .socket_path
             .ok_or(crate::error::Error::AgentNotFound)?;
 
-        // Create OwnedAgent if we auto-launched; None for explicit socket_path
-        let mut owned = match (discovery.child, discovery.temp_dir) {
-            (Some(child), Some(temp_dir)) => Some(OwnedAgent::new(child, temp_dir)),
-            _ => None,
-        };
+        // Transfer ownership from discovery
+        let mut owned = discovery.owned;
 
         let mut stream = match UnixStream::connect(&socket_path) {
             Ok(s) => s,
@@ -656,5 +583,78 @@ impl Client {
         }
         self.stream = None;
         Ok(())
+    }
+}
+
+// =============================================================================
+// In-crate tests for OwnedAgent lifecycle verification
+// =============================================================================
+
+#[cfg(test)]
+mod owned_agent_tests {
+    use super::*;
+    use crate::Config;
+
+    /// Verify that auto-launched agent process and temp directory are cleaned up.
+    /// This test uses in-crate access to Session.owned and OwnedAgent methods.
+    #[test]
+    fn test_auto_launched_agent_is_cleaned_up() {
+        // Build the agent if not already built
+        let agent_path = std::env::var("DTJ_AGENT_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("./crates/dtj/target/debug/dtj-agent"));
+
+        if !agent_path.exists() {
+            eprintln!("skipped: dtj-agent not built at {:?}", agent_path);
+            return;
+        }
+
+        let config = Config {
+            data_dir: None,
+            producer_name: "cleanup-test".to_string(),
+            producer_version: "0.1.0".to_string(),
+            agent_path: Some(agent_path.clone()),
+            socket_path: None, // Trigger auto-launch
+            session_file_name: None,
+            enabled: true,
+            warning_handler: None,
+        };
+
+        // Open session with auto-launch
+        let mut session = Session::open(&config).expect("session open");
+        assert!(
+            session.owned.is_some(),
+            "should have owned agent after auto-launch"
+        );
+
+        // Capture PID and temp_dir before taking ownership
+        let child_pid = session.owned.as_ref().unwrap().child_id();
+        let temp_path = session.owned.as_ref().unwrap().temp_dir_path().cloned();
+
+        let pid = child_pid.expect("should have PID");
+        let temp_path = temp_path.expect("should have temp_dir");
+
+        // Take ownership away from session (so we can inspect after close)
+        // Verify temp_dir exists before cleanup
+        assert!(temp_path.exists(), "temp_dir should exist before cleanup");
+
+        // Call session.close() - this should trigger cleanup via self.owned.take()
+        session.close().ok();
+        drop(session);
+
+        // Verify: process no longer exists
+        let pid_exists = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        assert!(
+            !pid_exists,
+            "agent process {} should be killed after cleanup",
+            pid
+        );
+
+        // Verify: temp directory deleted
+        assert!(
+            !temp_path.exists(),
+            "temp dir {:?} should be deleted after cleanup",
+            temp_path
+        );
     }
 }

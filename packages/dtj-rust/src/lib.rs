@@ -1,6 +1,7 @@
 pub mod client;
 pub mod discovery;
 pub mod error;
+pub(crate) mod owned_agent;
 pub mod protocol;
 pub mod types;
 pub use crate::types::Value;

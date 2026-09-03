@@ -6,20 +6,19 @@
 //! 3. `dtj-agent` in `PATH`
 //! 4. macOS fallback paths
 
+use crate::owned_agent::OwnedAgent;
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// Discovery result containing paths needed to connect to agent
 pub struct DiscoveryResult {
     /// Path to the agent binary (if discovered/validated)
-    pub agent_path: Option<PathBuf>,
+    pub(crate) agent_path: Option<PathBuf>,
     /// Path to the Unix socket
-    pub socket_path: PathBuf,
-    /// Child process if we launched the agent
-    pub child: Option<Child>,
-    /// If we launched the agent, this is the temp dir to clean up
-    pub temp_dir: Option<PathBuf>,
+    pub(crate) socket_path: PathBuf,
+    /// OwnedAgent if we launched the agent (owns child + temp_dir lifecycle)
+    pub(crate) owned: Option<OwnedAgent>,
 }
 
 impl std::fmt::Debug for DiscoveryResult {
@@ -27,8 +26,7 @@ impl std::fmt::Debug for DiscoveryResult {
         f.debug_struct("DiscoveryResult")
             .field("agent_path", &self.agent_path)
             .field("socket_path", &self.socket_path)
-            .field("child", &self.child.as_ref().map(|_| "Child"))
-            .field("temp_dir", &self.temp_dir)
+            .field("owned", &self.owned.as_ref().map(|_| "OwnedAgent"))
             .finish()
     }
 }
@@ -129,8 +127,7 @@ impl DiscoveryResult {
             return Ok(DiscoveryResult {
                 agent_path: None,
                 socket_path: socket_path.clone(),
-                child: None,
-                temp_dir: None,
+                owned: None,
             });
         }
 
@@ -174,11 +171,12 @@ impl DiscoveryResult {
                 use std::os::unix::fs::MetadataExt;
                 // S_IFSOCK = 0140000
                 if metadata.mode() & 0o170000 == 0o140000 {
+                    // Transfer ownership of child and temp_dir to OwnedAgent
+                    let owned = OwnedAgent::new(child, temp_dir);
                     return Ok(DiscoveryResult {
                         agent_path: Some(agent_path),
                         socket_path,
-                        child: Some(child),
-                        temp_dir: Some(temp_dir),
+                        owned: Some(owned),
                     });
                 }
             }
@@ -249,30 +247,27 @@ impl DiscoveryResult {
 pub struct Discovery {
     pub agent_path: Option<PathBuf>,
     pub socket_path: Option<PathBuf>,
-    /// Child process if SDK auto-launched the agent; None for explicit socket_path
-    pub child: Option<Child>,
-    /// Temp directory if SDK auto-launched the agent; None for explicit socket_path
-    pub temp_dir: Option<PathBuf>,
+    /// OwnedAgent if SDK auto-launched the agent (owns child + temp_dir lifecycle); None for explicit socket_path
+    pub(crate) owned: Option<OwnedAgent>,
 }
 
 impl Discovery {
     /// Find and optionally launch dtj-agent.
     ///
     /// If `Config.socket_path` is set:
-    /// - Returns immediately with that socket path and child=None, temp_dir=None
+    /// - Returns immediately with that socket path and owned=None
     ///   (SDK doesn't own external socket)
     ///
     /// Otherwise:
     /// - Finds agent binary via discovery order
     /// - Launches agent, creating temp directory for socket
-    /// - Returns socket_path and child/temp_dir for lifecycle cleanup
+    /// - Returns socket_path and owned (OwnedAgent) for lifecycle cleanup
     pub fn find(config: &crate::Config) -> Result<Self, crate::Error> {
         if config.socket_path.is_some() {
             return Ok(Discovery {
                 agent_path: None,
                 socket_path: config.socket_path.clone(),
-                child: None,
-                temp_dir: None,
+                owned: None,
             });
         }
 
@@ -280,8 +275,7 @@ impl Discovery {
         Ok(Discovery {
             agent_path: result.agent_path,
             socket_path: Some(result.socket_path),
-            child: result.child,
-            temp_dir: result.temp_dir,
+            owned: result.owned,
         })
     }
 }
