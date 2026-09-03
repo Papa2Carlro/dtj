@@ -6,10 +6,10 @@ mod tests {
         read_append_event_ok, read_error_frame, read_finish_session_ok_or_error, read_frame,
         read_hello_ok, read_hello_ok_or_error, read_intern_ok, read_open_session_ok,
         read_open_session_ok_or_error, write_append_event, write_finish_session, write_frame,
-        write_hello, write_intern, write_open_session, OpenSessionPayload, OPCODE_ERROR,
-        OPCODE_FINISH_SESSION, OPCODE_FINISH_SESSION_OK, OPCODE_HELLO, OPCODE_HELLO_OK,
-        OPCODE_INTERN, OPCODE_INTERN_OK, OPCODE_OPEN_SESSION, OPCODE_OPEN_SESSION_OK,
-        PROTOCOL_VERSION,
+        write_hello, write_intern, write_open_session, AppendEventFrame, OpenSessionPayload,
+        OPCODE_ERROR, OPCODE_FINISH_SESSION, OPCODE_FINISH_SESSION_OK, OPCODE_HELLO,
+        OPCODE_HELLO_OK, OPCODE_INTERN, OPCODE_INTERN_OK, OPCODE_OPEN_SESSION,
+        OPCODE_OPEN_SESSION_OK, PROTOCOL_VERSION,
     };
     use std::io::{Cursor, Read};
 
@@ -252,15 +252,17 @@ mod tests {
         let mut buf = Vec::new();
         write_append_event(
             &mut buf,
-            0x1122334455667788_u64, // monotonic_ns
-            1,
-            2,
-            3,
-            4,                             // domain, category, event_name, correlation IDs
-            0x01,                          // severity: Info
-            5,                             // field_name_id
-            0x02,                          // type_tag
-            &0xAABBCCDD_u64.to_le_bytes(), // value
+            AppendEventFrame {
+                monotonic_ns: 0x1122334455667788_u64,
+                domain_id: 1,
+                category_id: 2,
+                event_name_id: 3,
+                correlation_id: 4,
+                severity: 0x01, // Info
+                field_name_id: 5,
+                type_tag: 0x02,
+                value_body: &0xAABBCCDD_u64.to_le_bytes(),
+            },
         )
         .unwrap();
 
@@ -307,7 +309,7 @@ mod tests {
         assert_eq!(tt_buf[0], 0x02);
 
         // reserved: 3 bytes
-        p.read_exact(&mut &mut [0u8; 3][..]).unwrap();
+        p.read_exact(&mut [0u8; 3][..]).unwrap();
 
         // value_body: remaining bytes
         let mut value_buf = vec![0u8; p.len()];

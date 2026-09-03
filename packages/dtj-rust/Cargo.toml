@@ -2,6 +2,9 @@
 name = "dtj-sdk"
 version = "0.1.0"
 edition = "2021"
+description = "Thin Rust client SDK for the DTJ binary protocol over Unix domain sockets, providing a Session-based interface to dtj-agent."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Papa2Carlro/dtj.git"
 
 [lib]
 name = "dtj_sdk"

@@ -167,30 +167,35 @@ pub fn read_intern_ok<R: Read>(reader: &mut R) -> Result<u32, Error> {
 pub const OPCODE_APPEND_EVENT: u8 = 0x03;
 pub const OPCODE_APPEND_EVENT_OK: u8 = 0x83;
 
+/// Frame for writing an AppendEvent record.
+pub struct AppendEventFrame<'a> {
+    pub monotonic_ns: u64,
+    pub domain_id: u32,
+    pub category_id: u32,
+    pub event_name_id: u32,
+    pub correlation_id: u32,
+    pub severity: u8,
+    pub field_name_id: u32,
+    pub type_tag: u8,
+    pub value_body: &'a [u8],
+}
+
 pub fn write_append_event<W: Write>(
     writer: &mut W,
-    monotonic_ns: u64,
-    domain_id: u32,
-    category_id: u32,
-    event_name_id: u32,
-    correlation_id: u32,
-    severity: u8,
-    name_id: u32,
-    type_tag: u8,
-    value_body: &[u8],
+    frame: AppendEventFrame<'_>,
 ) -> Result<(), Error> {
     let mut payload = Vec::new();
-    payload.extend_from_slice(&monotonic_ns.to_le_bytes());
-    payload.extend_from_slice(&domain_id.to_le_bytes());
-    payload.extend_from_slice(&category_id.to_le_bytes());
-    payload.extend_from_slice(&event_name_id.to_le_bytes());
-    payload.extend_from_slice(&correlation_id.to_le_bytes());
-    payload.push(severity);
+    payload.extend_from_slice(&frame.monotonic_ns.to_le_bytes());
+    payload.extend_from_slice(&frame.domain_id.to_le_bytes());
+    payload.extend_from_slice(&frame.category_id.to_le_bytes());
+    payload.extend_from_slice(&frame.event_name_id.to_le_bytes());
+    payload.extend_from_slice(&frame.correlation_id.to_le_bytes());
+    payload.push(frame.severity);
     payload.extend_from_slice(&1u16.to_le_bytes()); // field_count = 1
-    payload.extend_from_slice(&name_id.to_le_bytes());
-    payload.push(type_tag);
+    payload.extend_from_slice(&frame.field_name_id.to_le_bytes());
+    payload.push(frame.type_tag);
     payload.extend_from_slice(&[0u8; 3]); // reserved
-    payload.extend_from_slice(value_body);
+    payload.extend_from_slice(frame.value_body);
     write_frame(writer, OPCODE_APPEND_EVENT, &payload)
 }
 

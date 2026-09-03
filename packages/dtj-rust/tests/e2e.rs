@@ -5,7 +5,7 @@
 //!     cargo test --manifest-path packages/dtj-rust/Cargo.toml --test e2e -- --nocapture
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::Duration;
 
@@ -23,11 +23,7 @@ impl Drop for AgentGuard {
     }
 }
 
-fn launch_agent(
-    agent_path: &PathBuf,
-    socket_path: &PathBuf,
-    data_dir: &PathBuf,
-) -> std::io::Result<Child> {
+fn launch_agent(agent_path: &Path, socket_path: &Path, data_dir: &Path) -> std::io::Result<Child> {
     Command::new(agent_path)
         .arg("--socket")
         .arg(socket_path.as_os_str())
@@ -36,7 +32,7 @@ fn launch_agent(
         .spawn()
 }
 
-fn wait_for_socket(socket_path: &PathBuf, timeout_secs: u64) -> bool {
+fn wait_for_socket(socket_path: &Path, timeout_secs: u64) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed().as_secs() < timeout_secs {
         if socket_path.exists() {
@@ -48,12 +44,12 @@ fn wait_for_socket(socket_path: &PathBuf, timeout_secs: u64) -> bool {
 }
 
 /// Run `dtj read-session` to verify session file
-fn verify_session_file(data_dir: &PathBuf) -> std::io::Result<()> {
+fn verify_session_file(data_dir: &Path) -> std::io::Result<()> {
     let dtj_bin = std::env::var("DTJ_BIN").unwrap_or_else(|_| String::from("dtj"));
 
     let dtj_files: Vec<_> = fs::read_dir(data_dir)?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "dtj"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "dtj"))
         .collect();
 
     if dtj_files.is_empty() {
@@ -71,13 +67,10 @@ fn verify_session_file(data_dir: &PathBuf) -> std::io::Result<()> {
         .output()?;
 
     if !output.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "dtj read-session failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        ));
+        return Err(std::io::Error::other(format!(
+            "dtj read-session failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
 
     eprintln!(
@@ -188,7 +181,7 @@ fn e2e() {
     let dtj_files: Vec<_> = fs::read_dir(&data_dir)
         .expect("read data dir")
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "dtj"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "dtj"))
         .collect();
 
     // Verify exactly one .dtj file exists

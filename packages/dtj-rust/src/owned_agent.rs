@@ -36,25 +36,99 @@ impl OwnedAgent {
         }
         self.temp_dir = None;
     }
-
-    /// Returns the child's PID if still held.
-    pub(crate) fn child_id(&self) -> Option<u32> {
-        self.child.as_ref().map(|c| c.id())
-    }
-
-    /// Returns the temp_dir path if still held.
-    pub(crate) fn temp_dir_path(&self) -> Option<&PathBuf> {
-        self.temp_dir.as_ref()
-    }
-
-    /// Returns true if cleanup has been called (child and temp_dir are None).
-    pub(crate) fn is_cleaned_up(&self) -> bool {
-        self.child.is_none() && self.temp_dir.is_none()
-    }
 }
 
 impl Drop for OwnedAgent {
     fn drop(&mut self) {
         self.cleanup();
+    }
+}
+
+#[cfg(test)]
+impl OwnedAgent {
+    fn child_id(&self) -> Option<u32> {
+        self.child.as_ref().map(|c| c.id())
+    }
+
+    fn temp_dir_path(&self) -> Option<&PathBuf> {
+        self.temp_dir.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod owned_agent_tests {
+    use std::path::PathBuf;
+
+    /// Verify that auto-launched agent process and temp directory are cleaned up.
+    #[test]
+    fn test_auto_launched_agent_is_cleaned_up() {
+        // Build the agent if not already built
+        let agent_path = std::env::var("DTJ_AGENT_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("./crates/dtj/target/debug/dtj-agent"));
+
+        if !agent_path.exists() {
+            eprintln!("skipped: dtj-agent not built at {:?}", agent_path);
+            return;
+        }
+
+        let config = crate::Config {
+            data_dir: None,
+            producer_name: "cleanup-test".to_string(),
+            producer_version: "0.1.0".to_string(),
+            agent_path: Some(agent_path.clone()),
+            socket_path: None, // Trigger auto-launch
+            session_file_name: None,
+            enabled: true,
+            warning_handler: None,
+        };
+
+        // Open session with auto-launch
+        let mut session = crate::Session::open(&config).expect("session open");
+        assert!(
+            session.owned.is_some(),
+            "should have owned agent after auto-launch"
+        );
+
+        // Capture PID and temp_dir before taking ownership
+        let child_pid = session.owned.as_ref().unwrap().child_id();
+        let temp_path = session.owned.as_ref().unwrap().temp_dir_path().cloned();
+
+        let pid = child_pid.expect("should have PID");
+        let temp_path = temp_path.expect("should have temp_dir");
+
+        println!("AUTO_LAUNCH_PID={}", pid);
+        println!("AUTO_LAUNCH_TEMP_DIR={}", temp_path.display());
+
+        // Verify temp_dir exists before cleanup
+        assert!(temp_path.exists(), "temp_dir should exist before cleanup");
+
+        // Call session.close() - this triggers cleanup via self.owned.take()
+        session.close().ok();
+        drop(session);
+
+        // Verify: process no longer exists
+        let pid_exists = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        println!(
+            "AUTO_LAUNCH_PID_CLEANUP={}",
+            if !pid_exists { "PASS" } else { "FAIL" }
+        );
+        assert!(
+            !pid_exists,
+            "agent process {} should be killed after cleanup",
+            pid
+        );
+
+        // Verify: temp directory deleted
+        let temp_gone = !temp_path.exists();
+        println!(
+            "AUTO_LAUNCH_TEMP_DIR_CLEANUP={}",
+            if temp_gone { "PASS" } else { "FAIL" }
+        );
+        assert!(
+            !temp_path.exists(),
+            "temp dir {:?} should be deleted after cleanup",
+            temp_path
+        );
     }
 }

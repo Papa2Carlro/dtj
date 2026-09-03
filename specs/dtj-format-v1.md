@@ -51,7 +51,7 @@ EventChunk*
 | 40 | 8 | `u64` | `mono_origin_ns` | Producer monotonic clock at session open, little-endian |
 | 48 | 32 | `[u8;32]` | `producer_name` | UTF-8, NUL-padded; first NUL or full 32 |
 | 80 | 16 | `[u8;16]` | `producer_version` | UTF-8, NUL-padded |
-| 96 | 32 | `[u8;32]` | `reserved` | Must be zero |
+| 96 | 32 | `[u8;32]` | `reserved` | Ignored (writers write 0; readers do not validate) |
 
 Total: **128** bytes. No variable-length region follows the header in v1.
 
@@ -193,7 +193,7 @@ Each field:
 | ---: | ---: | --- | --- | --- |
 | 0 | 4 | `u32` | `name_id` | Dictionary ID (kind=STRING), little-endian |
 | 4 | 1 | `u8` | `type_tag` | See Type Tags below |
-| 5 | 1 | `u8` | `reserved` | Must be 0 |
+| 5 | 1 | `u8` | `reserved` | Ignored (writers write 0; readers do not validate) |
 | 6 | variable | `bytes` | `value` | Type-dependent encoding (see below) |
 
 ### Type Tags (u8)
@@ -280,7 +280,6 @@ Readers must reject the file (return a structured error, do not silently continu
 - File header `endian_magic` != `0x01020304` (LE on disk)
 - Chunk header magic != `DTJC` **at first chunk position (offset 128)**
 - Chunk `payload_len` > `MAX_CHUNK_PAYLOAD` (16_777_216)
-- Chunk trailer `committed_marker` != `0xD7C0FFEE`
 - Chunk trailer CRC-32 mismatch
 - Chunk `chunk_sequence` gap or duplicate
 - Dictionary entry `id` == 0
@@ -304,6 +303,7 @@ Readers must reject the file (return a structured error, do not silently continu
 - Reserved bytes in file header, chunk header, event header, field header
 - Unknown/reserved `chunk_type` values (skipped after CRC verification)
 - `ENUM` type tag values (treated as opaque u32, not validated as dictionary reference)
+- Invalid `committed_marker` in chunk trailer (treated as torn/uncommitted tail; see Torn‑Tail Recovery)
 
 ## Format Versioning
 
