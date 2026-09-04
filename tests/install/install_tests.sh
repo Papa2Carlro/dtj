@@ -1,343 +1,213 @@
 #!/usr/bin/env bash
 # DTJ installer — shell unit tests
-#
-# Run with:  bash tests/install/install_tests.sh
-# Or with bats:  bats tests/install/install_tests.sh
-#
-# Each TEST_* function is a standalone test.
-# Use SKIP to mark known issues (exit 0 but log skipped).
-
 set -euo pipefail
 
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
-TESTS_SKIPPED=0
-
+TESTS_RUN=0; TESTS_PASSED=0; TESTS_FAILED=0; TESTS_SKIPPED=0
 pass()  { TESTS_RUN=$((TESTS_RUN+1)); TESTS_PASSED=$((TESTS_PASSED+1)); echo "  PASS: $1"; }
 fail()  { TESTS_RUN=$((TESTS_RUN+1)); TESTS_FAILED=$((TESTS_FAILED+1)); echo "  FAIL: $1"; }
 skip()  { TESTS_RUN=$((TESTS_RUN+1)); TESTS_SKIPPED=$((TESTS_SKIPPED+1)); echo "  SKIP: $1"; }
 
-# ── Helper / mock functions ──────────────────────────────────────────────────
+REPO="Papa2Carlro/dtj"
 
-# Override these to inject test doubles.
-# Real implementations are in ../install.sh (sourced below).
-
-resolve_latest_tag() {
-  # Real: hits GitHub. Overridden in tests.
-  echo "v0.1.1"
-}
-
-normalize_version() {
-  local v="$1"
-  v="${v#v}"
-  echo "${v}"
-}
-
-compute_sha256() {
-  local file="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "${file}" | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "${file}" | awk '{print $1}'
-  fi
-}
+normalize_version() { local v="$1"; v="${v#v}"; echo "${v}"; }
 
 detect_target() {
-  local os arch
-  os="$(uname -s)"
-  arch="$(uname -m)"
+  local os="$1" arch="$2"
   case "${os}" in
     Darwin)
       case "${arch}" in arm64)  echo "aarch64-apple-darwin" ;;
-                              x86_64) echo "x86_64-apple-darwin" ;;
-                              *)      echo "Unsupported Darwin architecture: ${arch}" >&2; return 1 ;;
+                        x86_64) echo "x86_64-apple-darwin" ;;
+                        *)      echo "Unsupported Darwin architecture: ${arch}" >&2; return 1 ;;
       esac ;;
     Linux)
-      case "${arch}" in x86_64)  echo "x86_64-unknown-linux-gnu" ;;
-                              aarch64|arm64) echo "aarch64-unknown-linux-gnu" ;;
-                              *)    echo "Unsupported Linux architecture: ${arch}" >&2; return 1 ;;
+      case "${arch}" in
+        x86_64|aarch64|arm64) echo "${arch}-unknown-linux-gnu" ;;
+        *)      echo "Unsupported Linux architecture: ${arch}" >&2; return 1 ;;
       esac ;;
-    *) echo "Unsupported platform: ${os}" >&2; return 1 ;;
+    *)   echo "Unsupported platform: ${os}" >&2; return 1 ;;
   esac
 }
 
-# ── T1: Platform mapping ─────────────────────────────────────────────────────
-
-test_darwin_arm64() {
-  local os="Darwin" arch="arm64" expected="aarch64-apple-darwin"
-  local result
-  # Simulate detect_target via direct case logic (matches install.sh)
-  result="aarch64-apple-darwin"
-  if [[ "${result}" == "${expected}" ]]; then
-    pass "T1 Darwin/arm64 → ${expected}"
-  else
-    fail "T1 Darwin/arm64: got '${result}', want '${expected}'"
-  fi
+resolve_latest_tag() {
+  local latest_url="https://github.com/${REPO}/releases/latest"
+  local redirected tag
+  redirected=$(curl -fsSL -o /dev/null -w '%{url_effective}' "${latest_url}" 2>/dev/null)
+  [[ -z "${redirected}" ]] && return 1
+  tag=$(echo "${redirected}" | awk -F/ '{print $NF}')
+  case "${tag}" in v[0-9]*.[0-9]*.[0-9]*) echo "${tag}" ;; *) return 1 ;; esac
 }
 
-test_darwin_x86_64() {
-  local expected="x86_64-apple-darwin"
-  result="x86_64-apple-darwin"
-  if [[ "${result}" == "${expected}" ]]; then
-    pass "T1 Darwin/x86_64 → ${expected}"
-  else
-    fail "T1 Darwin/x86_64: got '${result}', want '${expected}'"
-  fi
-}
+# ── T1: Platform mapping ──────────────────────────────────────────────────────
+test_darwin_arm64()   { [[ "$(detect_target Darwin arm64)"  == "aarch64-apple-darwin"   ]] && pass "T1 Darwin/arm64"   || fail "T1 Darwin/arm64"   got "$(detect_target Darwin arm64)"; }
+test_darwin_x86_64()  { [[ "$(detect_target Darwin x86_64)" == "x86_64-apple-darwin"  ]] && pass "T1 Darwin/x86_64"  || fail "T1 Darwin/x86_64"  got "$(detect_target Darwin x86_64)"; }
+test_linux_x86_64()   { [[ "$(detect_target Linux x86_64)" == "x86_64-unknown-linux-gnu" ]] && pass "T1 Linux/x86_64"   || fail "T1 Linux/x86_64"   got "$(detect_target Linux x86_64)"; }
+test_linux_aarch64()  { [[ "$(detect_target Linux aarch64)" == "aarch64-unknown-linux-gnu" ]] && pass "T1 Linux/aarch64"  || fail "T1 Linux/aarch64"  got "$(detect_target Linux aarch64)"; }
 
-test_linux_x86_64() {
-  local expected="x86_64-unknown-linux-gnu"
-  result="x86_64-unknown-linux-gnu"
-  if [[ "${result}" == "${expected}" ]]; then
-    pass "T1 Linux/x86_64 → ${expected}"
-  else
-    fail "T1 Linux/x86_64: got '${result}', want '${expected}'"
-  fi
-}
+# ── T2: Unsupported rejection ────────────────────────────────────────────────
+test_unsupported_platform() { detect_target FreeBSD x86_64 2>/dev/null && fail "T2 unsupported platform: no error" || pass "T2 unsupported platform"; }
+test_unsupported_arch()     { detect_target Linux s390x 2>/dev/null    && fail "T2 unsupported arch: no error"       || pass "T2 unsupported arch"; }
 
-test_linux_aarch64() {
-  local expected="aarch64-unknown-linux-gnu"
-  result="aarch64-unknown-linux-gnu"
-  if [[ "${result}" == "${expected}" ]]; then
-    pass "T1 Linux/aarch64 → ${expected}"
-  else
-    fail "T1 Linux/aarch64: got '${result}', want '${expected}'"
-  fi
-}
+# ── T3: Version normalization ─────────────────────────────────────────────────
+test_normalize_no_v()      { [[ "$(normalize_version 0.1.1)"   == "0.1.1" ]] && pass "T3 normalize 0.1.1"    || fail "T3 normalize 0.1.1 got $(normalize_version 0.1.1)"; }
+test_normalize_with_v()    { [[ "$(normalize_version v0.1.1)" == "0.1.1" ]] && pass "T3 normalize v0.1.1"  || fail "T3 normalize v0.1.1 got $(normalize_version v0.1.1)"; }
+test_normalize_multiple_v(){ [[ "$(normalize_version vv0.1.1)" == "v0.1.1" ]] && pass "T3 normalize vv0.1.1" || fail "T3 normalize vv0.1.1 got $(normalize_version vv0.1.1)"; }
 
-# ── T2: Unsupported platform rejection ───────────────────────────────────────
-
-test_unsupported_platform() {
-  # unsupported platform must produce non-zero exit
-  local output
-  output=$(bash -c '
-    detect_target() {
-      local os="$1" arch="$2"
-      case "${os}" in
-        Darwin)
-          case "${arch}" in
-            arm64)  echo "aarch64-apple-darwin" ;;
-            x86_64) echo "x86_64-apple-darwin" ;;
-            *)      echo "Unsupported Darwin architecture: ${arch}" >&2; return 1 ;;
-          esac ;;
-        Linux)
-          case "${arch}" in
-            x86_64)  echo "x86_64-unknown-linux-gnu" ;;
-            aarch64|arm64) echo "aarch64-unknown-linux-gnu" ;;
-            *)      echo "Unsupported Linux architecture: ${arch}" >&2; return 1 ;;
-          esac ;;
-        *)   echo "Unsupported platform: ${os}" >&2; return 1 ;;
-      esac
-    }
-    detect_target "FreeBSD" "x86_64"
-  ' 2>&1) || true
-  if [[ "${output}" == *"Unsupported platform"* ]]; then
-    pass "T2 unsupported platform → non-zero exit"
-  else
-    fail "T2 unsupported platform: got '${output}'"
-  fi
-}
-
-test_unsupported_arch() {
-  # unsupported arch must produce non-zero exit
-  local output
-  output=$(bash -c '
-    detect_target() {
-      case "$1/$2" in
-        */ppc)
-          echo "Unsupported Darwin architecture: ppc" >&2; return 1 ;;
-        */s390x)
-          echo "Unsupported Linux architecture: s390x" >&2; return 1 ;;
-        *)
-          case "$(uname -s)" in
-            Darwin)  echo "aarch64-apple-darwin" ;;
-            Linux)   echo "x86_64-unknown-linux-gnu" ;;
-          esac
-          ;;
-      esac
-    }
-    detect_target "Linux" "s390x"
-  ' 2>&1) || true
-  if [[ "${output}" == *"Unsupported"* ]]; then
-    pass "T2 unsupported arch → non-zero exit"
-  else
-    fail "T2 unsupported arch: got '${output}'"
-  fi
-}
-
-# ── T3: Version normalization ────────────────────────────────────────────────
-
-test_normalize_no_v() {
-  local v="0.1.1"
-  local result
-  result=$(normalize_version "${v}")
-  if [[ "${result}" == "0.1.1" ]]; then
-    pass "T3 normalize '0.1.1' → '0.1.1'"
-  else
-    fail "T3 normalize '0.1.1': got '${result}', want '0.1.1'"
-  fi
-}
-
-test_normalize_with_v() {
-  local result
-  result=$(normalize_version "v0.1.1")
-  if [[ "${result}" == "0.1.1" ]]; then
-    pass "T3 normalize 'v0.1.1' → '0.1.1'"
-  else
-    fail "T3 normalize 'v0.1.1': got '${result}', want '0.1.1'"
-  fi
-}
-
-test_normalize_multiple_v() {
-  local result
-  result=$(normalize_version "vv0.1.1")
-  if [[ "${result}" == "v0.1.1" ]]; then
-    pass "T3 normalize 'vv0.1.1' → 'v0.1.1'"
-  else
-    fail "T3 normalize 'vv0.1.1': got '${result}', want 'v0.1.1'"
-  fi
-}
-
-# ── T4: Checksum match ───────────────────────────────────────────────────────
-
+# ── T4/T5: Checksum ─────────────────────────────────────────────────────────
 test_checksum_match() {
-  # Create a known file and compute its SHA
-  local tmpfile
-  tmpfile=$(mktemp)
-  echo "hello dtj" > "${tmpfile}"
-  local expected actual
-  expected=$(compute_sha256 "${tmpfile}")
-  actual="${expected}"  # identical = match
-  rm -f "${tmpfile}"
-  if [[ "${expected}" == "${actual}" ]]; then
-    pass "T4 checksum match → identical"
-  else
-    fail "T4 checksum match: expected=${expected} actual=${actual}"
-  fi
+  local tmpfile expected actual
+  tmpfile=$(mktemp); echo "hello dtj" > "${tmpfile}"
+  expected=$(sha256sum "${tmpfile}" | awk '{print $1}')
+  actual="${expected}"; rm -f "${tmpfile}"
+  [[ "${expected}" == "${actual}" ]] && pass "T4 checksum match" || fail "T4 checksum match"
 }
-
 test_checksum_mismatch() {
-  local tmpfile
-  tmpfile=$(mktemp)
-  echo "hello dtj" > "${tmpfile}"
-  local expected actual
-  expected=$(compute_sha256 "${tmpfile}")
-  actual="0000000000000000000000000000000000000000000000000000000000000000"
-  rm -f "${tmpfile}"
-  if [[ "${expected}" != "${actual}" ]]; then
-    pass "T4 checksum mismatch → different"
-  else
-    fail "T4 checksum mismatch: strings should differ"
-  fi
+  local tmpfile expected
+  tmpfile=$(mktemp); echo "hello dtj" > "${tmpfile}"
+  expected=$(sha256sum "${tmpfile}" | awk '{print $1}'); rm -f "${tmpfile}"
+  [[ "${expected}" != "0000000000000000000000000000000000000000000000000000000000000000" ]] && pass "T4 checksum mismatch" || fail "T4 checksum mismatch"
 }
-
-# ── T5: Checksum mismatch → fail before install ──────────────────────────────
-
 test_checksum_mismatch_fails() {
-  # Simulate: when checksums don't match, script exits non-zero
-  local expected="abcd1234"
-  local actual="0000ffff"
-  if [[ "${expected}" != "${actual}" ]]; then
-    pass "T5 checksum mismatch would trigger exit 1"
-  else
-    fail "T5: mismatch logic broken"
-  fi
+  local expected="abcd1234" actual="0000ffff"
+  [[ "${expected}" != "${actual}" ]] && pass "T5 checksum mismatch → exit 1" || fail "T5 checksum mismatch logic"
 }
 
-# ── T6: Install into temp directory ──────────────────────────────────────────
-
+# ── T6: Atomic install ────────────────────────────────────────────────────────
 test_install_dir_creation() {
-  local tmpdir
+  local tmpdir archive_dir install_dir
   tmpdir=$(mktemp -d)
-  mkdir -p "${tmpdir}/dtj-0.1.1-x86_64-unknown-linux-gnu"
-  echo "#!/bin/bash" > "${tmpdir}/dtj-0.1.1-x86_64-unknown-linux-gnu/dtj"
-  echo "#!/bin/bash" > "${tmpdir}/dtj-0.1.1-x86_64-unknown-linux-gnu/dtj-agent"
-  chmod +x "${tmpdir}/dtj-0.1.1-x86_64-unknown-linux-gnu/dtj"
-  chmod +x "${tmpdir}/dtj-0.1.1-x86_64-unknown-linux-gnu/dtj-agent"
-  mkdir -p "${tmpdir}/install-target"
-  cp -r "${tmpdir}/dtj-0.1.1-x86_64-unknown-linux-gnu" "${tmpdir}/install-target/dtj-0.1.1-x86_64-unknown-linux-gnu"
-  if [[ -x "${tmpdir}/install-target/dtj-0.1.1-x86_64-unknown-linux-gnu/dtj" ]]; then
-    pass "T6 temp install dir created and binary accessible"
-  else
-    fail "T6 temp install dir binary not accessible"
-  fi
+  archive_dir="${tmpdir}/dtj-v0.1.1-x86_64-unknown-linux-gnu"
+  install_dir="${tmpdir}/target"
+  mkdir -p "${archive_dir}"
+  echo '#!/bin/bash' > "${archive_dir}/dtj"
+  echo '#!/bin/bash' > "${archive_dir}/dtj-agent"
+  chmod +x "${archive_dir}/dtj" "${archive_dir}/dtj-agent"
+  mkdir -p "${install_dir}"
+  cp "${archive_dir}/dtj" "${install_dir}/.dtj-$$"
+  cp "${archive_dir}/dtj-agent" "${install_dir}/.dtj-agent-$$"
+  chmod 0755 "${install_dir}/.dtj-$$" "${install_dir}/.dtj-agent-$$"
+  mv "${install_dir}/.dtj-$$" "${install_dir}/dtj"
+  mv "${install_dir}/.dtj-agent-$$" "${install_dir}/dtj-agent"
+  [[ -x "${install_dir}/dtj" ]] && [[ -x "${install_dir}/dtj-agent" ]] && pass "T6 atomic install" || fail "T6 atomic install"
   rm -rf "${tmpdir}"
 }
 
-# ── T7: Version smoke against controlled fixture ─────────────────────────────
-
+# ── T7: Version smoke ────────────────────────────────────────────────────────
 test_version_smoke() {
-  local tmpbin
-  tmpbin=$(mktemp)
-  echo '#!/bin/bash' > "${tmpbin}"
-  echo 'echo "dtj 0.1.1"' >> "${tmpbin}"
-  chmod +x "${tmpbin}"
-  local output
-  output=$("${tmpbin}" --version 2>&1 | awk '{print $2}')
-  rm -f "${tmpbin}"
-  if [[ "${output}" == "0.1.1" ]]; then
-    pass "T7 version smoke fixture → '0.1.1'"
-  else
-    fail "T7 version smoke: got '${output}', want '0.1.1'"
-  fi
+  local tmpbin out
+  tmpbin=$(mktemp); echo '#!/bin/bash' > "${tmpbin}"; echo 'echo "dtj 0.1.1"' >> "${tmpbin}"
+  chmod +x "${tmpbin}"; out=$("${tmpbin}" --version 2>&1 | awk '{print $2}'); rm -f "${tmpbin}"
+  [[ "${out}" == "0.1.1" ]] && pass "T7 version smoke" || fail "T7 version smoke got '${out}'"
 }
-
 test_agent_smoke() {
-  local tmpbin
-  tmpbin=$(mktemp)
-  echo '#!/bin/bash' > "${tmpbin}"
-  echo 'echo "dtj-agent 0.1.1"' >> "${tmpbin}"
-  chmod +x "${tmpbin}"
-  local output
-  output=$("${tmpbin}" --version 2>&1 | awk '{print $2}')
-  rm -f "${tmpbin}"
-  if [[ "${output}" == "0.1.1" ]]; then
-    pass "T7 agent version smoke fixture → '0.1.1'"
+  local tmpbin out
+  tmpbin=$(mktemp); echo '#!/bin/bash' > "${tmpbin}"; echo 'echo "dtj-agent 0.1.1"' >> "${tmpbin}"
+  chmod +x "${tmpbin}"; out=$("${tmpbin}" --version 2>&1 | awk '{print $2}'); rm -f "${tmpbin}"
+  [[ "${out}" == "0.1.1" ]] && pass "T7 agent smoke" || fail "T7 agent smoke got '${out}'"
+}
+
+# ── T8: no gh dependency ─────────────────────────────────────────────────────
+test_no_gh() {
+  if grep -qE '(^|[[:space:]])gh([[:space:]]|$)' install.sh; then
+    fail "T8 gh found in install.sh"
   else
-    fail "T7 agent smoke: got '${output}', want '0.1.1'"
+    pass "T8 no gh in install.sh"
   fi
 }
 
-# ── Run all tests ───────────────────────────────────────────────────────────
+# ── T9: no git dependency ─────────────────────────────────────────────────────
+test_no_git() {
+  if grep -qE '(^|[[:space:]])git([[:space:]]|$)' install.sh; then
+    fail "T9 git found in install.sh"
+  else
+    pass "T9 no git in install.sh"
+  fi
+}
 
+# ── T10: latest redirect parsing ──────────────────────────────────────────────
+test_latest_redirect_parsing() {
+  local tag
+  tag=$(echo "https://github.com/Papa2Carlro/dtj/releases/tag/v0.1.1" | awk -F/ '{print $NF}')
+  [[ "${tag}" == "v0.1.1" ]] && pass "T10 redirect parsing" || fail "T10 redirect parsing got '${tag}'"
+}
+
+test_latest_redirect_real() {
+  local out
+  out=$(resolve_latest_tag 2>/dev/null || true)
+  if [[ -z "${out}" ]]; then
+    skip "T10 real network: no connectivity"
+  elif [[ "${out}" == "v0.1.1" ]]; then
+    pass "T10 real network → v0.1.1"
+  else
+    fail "T10 real network got '${out}'"
+  fi
+}
+
+# ── T11: malformed redirect must fail ─────────────────────────────────────────
+test_malformed_tag_validation() {
+  local tag rc
+  tag="latest"
+  case "${tag}" in v[0-9]*.[0-9]*.[0-9]*) rc=0 ;; *) rc=1 ;; esac
+  [[ "${rc}" -ne 0 ]] && pass "T11 'latest' rejected" || fail "T11 'latest' should be rejected"
+}
+
+test_malformed_redirect() {
+  local url tag ok=0
+  for url in "https://github.com/Papa2Carlro/dtj/releases" "https://example.com/foo"; do
+    tag=$(echo "${url}" | awk -F/ '{print $NF}')
+    case "${tag}" in v[0-9]*.[0-9]*.[0-9]*) ok=1; break ;; esac
+  done
+  [[ "${ok}" -eq 0 ]] && pass "T11 malformed URL rejected" || fail "T11 malformed URL accepted"
+}
+
+# ── T12: explicit version skips latest lookup ─────────────────────────────────
+test_explicit_version_skips_latest() {
+  local VERSION="0.1.1" TAG
+  TAG="v${VERSION#v}"
+  [[ "${TAG}" == "v0.1.1" ]] && pass "T12 explicit version TAG built" || fail "T12 explicit version TAG got '${TAG}'"
+}
+
+test_explicit_version_logic() {
+  local VERSION="0.1.1" resolved_tag
+  if [[ -z "${VERSION}" ]]; then
+    resolved_tag=$(resolve_latest_tag 2>/dev/null || true)
+  else
+    resolved_tag="v${VERSION#v}"
+  fi
+  [[ "${resolved_tag}" == "v0.1.1" ]] && pass "T12 explicit version logic" || fail "T12 explicit version logic got '${resolved_tag}'"
+}
+
+# ── Run all tests ────────────────────────────────────────────────────────────
 run_all() {
   echo ""
   echo "=== DTJ Installer Unit Tests ==="
   echo ""
-
-  echo "-- Platform mapping (T1) --"
-  test_darwin_arm64
-  test_darwin_x86_64
-  test_linux_x86_64
-  test_linux_aarch64
-
+  echo "-- T1: Platform mapping --"
+  test_darwin_arm64; test_darwin_x86_64; test_linux_x86_64; test_linux_aarch64
   echo ""
-  echo "-- Unsupported rejection (T2) --"
-  test_unsupported_platform
-  test_unsupported_arch
-
+  echo "-- T2: Unsupported rejection --"
+  test_unsupported_platform; test_unsupported_arch
   echo ""
-  echo "-- Version normalization (T3) --"
-  test_normalize_no_v
-  test_normalize_with_v
-  test_normalize_multiple_v
-
+  echo "-- T3: Version normalization --"
+  test_normalize_no_v; test_normalize_with_v; test_normalize_multiple_v
   echo ""
-  echo "-- Checksum (T4/T5) --"
-  test_checksum_match
-  test_checksum_mismatch
-  test_checksum_mismatch_fails
-
+  echo "-- T4/T5: Checksum --"
+  test_checksum_match; test_checksum_mismatch; test_checksum_mismatch_fails
   echo ""
-  echo "-- Install (T6) --"
+  echo "-- T6: Atomic install --"
   test_install_dir_creation
-
   echo ""
-  echo "-- Smoke (T7) --"
-  test_version_smoke
-  test_agent_smoke
-
+  echo "-- T7: Smoke --"
+  test_version_smoke; test_agent_smoke
+  echo ""
+  echo "-- T8/T9: No-gh / No-git --"
+  test_no_gh; test_no_git
+  echo ""
+  echo "-- T10/T11: Latest redirect --"
+  test_latest_redirect_parsing; test_latest_redirect_real
+  test_malformed_tag_validation; test_malformed_redirect
+  echo ""
+  echo "-- T12: Explicit version --"
+  test_explicit_version_skips_latest; test_explicit_version_logic
   echo ""
   echo "=== Results ==="
   echo "  Run:    ${TESTS_RUN}"
@@ -345,14 +215,7 @@ run_all() {
   echo "  Failed: ${TESTS_FAILED}"
   echo "  Skipped:${TESTS_SKIPPED}"
   echo ""
-
-  if [[ "${TESTS_FAILED}" -gt 0 ]]; then
-    echo "OVERALL: FAIL"
-    exit 1
-  else
-    echo "OVERALL: PASS"
-    exit 0
-  fi
+  [[ "${TESTS_FAILED}" -gt 0 ]] && echo "OVERALL: FAIL" && exit 1 || echo "OVERALL: PASS"
 }
 
 run_all

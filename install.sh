@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # DTJ installer — Unix/macOS
 #
+# Requires only: bash, curl, tar, sha256sum or shasum, mktemp
+# No gh, git, jq, python, node, cargo, or rustc required.
+#
 # Usage:
 #   ./install.sh                       # latest release
 #   ./install.sh --version 0.1.1      # explicit (with or without 'v')
@@ -95,27 +98,43 @@ detect_target() {
 }
 
 # ── Latest version resolution ──────────────────────────────────────────────────
+# Uses GitHub redirect: curl -L follows the redirect to /releases/tag/vX.Y.Z
+# No JSON API, no gh, no git.
 
 resolve_latest_tag() {
-  # Use gh (authenticated) to resolve latest tag; fall back to git ls-remote
-  if command -v gh >/dev/null 2>&1; then
-    local tag
-    tag=$(gh api "repos/${REPO}/releases/latest" --jq '.tag_name' 2>/dev/null)
-    if [[ -n "${tag}" ]]; then
+  local latest_url="https://github.com/${REPO}/releases/latest"
+  local redirected
+  # -fsSL: fail silently, follow redirects, no progress, location header only
+  # -o /dev/null: discard response body (not needed)
+  # -w '%{url_effective}': write the final URL after redirects
+  redirected=$(curl -fsSL -o /dev/null -w '%{url_effective}' "${latest_url}" 2>/dev/null)
+
+  if [[ -z "${redirected}" ]]; then
+    echo "Failed to resolve latest release URL (is GitHub reachable?)" >&2
+    return 1
+  fi
+
+  # redirected looks like: https://github.com/Papa2Carlro/dtj/releases/tag/v0.1.1
+  # Extract the last path component (the tag).
+  local tag
+  tag=$(echo "${redirected}" | awk -F/ '{print $NF}')
+  if [[ -z "${tag}" ]]; then
+    echo "Failed to extract tag from: ${redirected}" >&2
+    return 1
+  fi
+
+  # Validate tag format: must be vMAJOR.MINOR.PATCH (e.g. v0.1.1)
+  case "${tag}" in
+    v[0-9]*.[0-9]*.[0-9]*)
       echo "${tag}"
       return 0
-    fi
-  fi
-  # Fallback: git ls-remote (works for public repos without GitHub auth)
-  local tag
-  tag=$(git ls-remote --tags "https://github.com/${REPO}.git" 2>/dev/null | \
-    grep -v '\^{}' | awk -F/ '{print $NF}' | sort -V | tail -1)
-  if [[ -n "${tag}" ]]; then
-    echo "${tag}"
-    return 0
-  fi
-  echo "Failed to resolve latest release tag" >&2
-  return 1
+      ;;
+    *)
+      echo "Unexpected tag format from latest redirect: '${tag}'" >&2
+      echo "Expected format: vMAJOR.MINOR.PATCH" >&2
+      return 1
+      ;;
+  esac
 }
 
 # ── Version normalization ─────────────────────────────────────────────────────
@@ -127,7 +146,7 @@ normalize_version() {
   echo "${v}"
 }
 
-# ── Checksum verification ─────────────────────────────────────────────────────
+# ── SHA-256 computation ───────────────────────────────────────────────────────
 
 compute_sha256() {
   local file="$1"
@@ -151,7 +170,7 @@ if [[ -z "${VERSION}" ]]; then
   echo "Resolving latest release..."
   TAG=$(resolve_latest_tag)
 else
-  # Normalize: strip leading 'v', then re-add for tag
+  # Explicit version: normalize, build TAG, skip latest lookup
   VERSION=$(normalize_version "${VERSION}")
   TAG="v${VERSION}"
 fi
@@ -159,18 +178,20 @@ fi
 echo "Version: ${VERSION:-$(echo "${TAG}" | sed 's/^v//')}"
 echo "Install dir: ${INSTALL_DIR}"
 
-# ── Download ─────────────────────────────────────────────────────────────────
+# ── Require curl ───────────────────────────────────────────────────────────────
 
-REQUIRED_TOOLS="curl"
-for tool in ${REQUIRED_TOOLS}; do
-  if ! command -v "${tool}" >/dev/null 2>&1; then
-    echo "Required tool not found: ${tool}" >&2
-    exit 1
-  fi
-done
+if ! command -v curl >/dev/null 2>&1; then
+  echo "Required tool not found: curl" >&2
+  exit 1
+fi
+
+# ── Build download URLs ────────────────────────────────────────────────────────
+# Direct CDN URLs — no API, no auth required.
 
 TARBALL="dtj-${TAG}-${TARGET}.tar.gz"
 BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
+
+# ── Temp directory with cleanup ───────────────────────────────────────────────
 
 TMPDIR=""
 cleanup() {
@@ -181,31 +202,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 TMPDIR=$(mktemp -d)
-echo "Downloading..."
-if command -v gh >/dev/null 2>&1 && \
-   gh release download "${TAG}" --repo "${REPO}" --dir "${TMPDIR}" \
-     --pattern "${TARBALL}" --pattern "SHA256SUMS" 2>/dev/null; then
-  :  # gh download succeeded, files are in TMPDIR
-else
-  # Fallback: use GitHub API to resolve CDN download URLs
-  local download_urls
-  download_urls=$(gh api "repos/${REPO}/releases/tags/${TAG}" \
-    --jq '.assets[] | select(.name == "'"${TARBALL}"'" or .name == "SHA256SUMS") | .url' 2>/dev/null)
-  if [[ -z "${download_urls}" ]]; then
-    echo "Failed to resolve download URLs for ${TAG}. Is the release published?" >&2
-    exit 1
-  fi
-  local url
-  while IFS= read -r url; do
-    # Decode percent-encoding: %20 → space, %3A → colon, etc.
-    local fname
-    fname=$(basename "${url}" | python3 -c 'import sys,urllib.parse;print(urllib.parse.unquote(sys.stdin.read().strip()))' 2>/dev/null \
-      || basename "${url}" | sed 's/%20/ /g;s/%3A/:/g')
-    curl -fsL "${url}" -o "${TMPDIR}/${fname}"
-  done <<< "${download_urls}"
-fi
 
-# Verify files landed
+# ── Download tarball and SHA256SUMS ──────────────────────────────────────────
+
+echo "Downloading..."
+curl -fL "${BASE_URL}/${TARBALL}" -o "${TMPDIR}/${TARBALL}"
+curl -fL "${BASE_URL}/SHA256SUMS" -o "${TMPDIR}/SHA256SUMS"
+
+# ── Verify files landed ───────────────────────────────────────────────────────
+
 if [[ ! -f "${TMPDIR}/${TARBALL}" ]]; then
   echo "FAIL: ${TARBALL} not found after download" >&2
   exit 1
@@ -215,11 +220,12 @@ if [[ ! -f "${TMPDIR}/SHA256SUMS" ]]; then
   exit 1
 fi
 
-# ── Checksum verification ──────────────────────────────────────────────────────
+# ── Checksum verification (BEFORE extraction) ─────────────────────────────────
 
 echo "Verifying SHA-256..."
 
-# Extract expected hash for our exact basename (basenames only in SHA256SUMS)
+# SHA256SUMS contains lines like:  abc123  dtj-v0.1.1-aarch64-apple-darwin.tar.gz
+# We look up by basename so the path in SHA256SUMS matches what we downloaded.
 EXPECTED_HASH=$(grep -F " ${TARBALL}" "${TMPDIR}/SHA256SUMS" | awk '{print $1}')
 if [[ -z "${EXPECTED_HASH}" ]]; then
   echo "FAIL: no checksum entry for ${TARBALL} in SHA256SUMS" >&2
@@ -245,6 +251,7 @@ echo "Verifying SHA-256... OK"
 echo "Extracting..."
 tar -xzf "${TMPDIR}/${TARBALL}" -C "${TMPDIR}"
 
+# Archive extracts to dtj-v0.1.1-aarch64-apple-darwin/ (TAG-based name)
 ARCHIVE_DIR="${TMPDIR}/dtj-${TAG}-${TARGET}"
 if [[ ! -d "${ARCHIVE_DIR}" ]]; then
   echo "FAIL: unexpected archive structure, dtj dir not found" >&2
@@ -260,32 +267,39 @@ if [[ ! -x "${ARCHIVE_DIR}/dtj-agent" ]]; then
   exit 1
 fi
 
-# ── Install ───────────────────────────────────────────────────────────────────
+# ── Install (atomic: copy to temp file then rename) ───────────────────────────
 
 echo "Installing..."
 mkdir -p "${INSTALL_DIR}"
 
-if command -v install >/dev/null 2>&1; then
-  install -m 0755 "${ARCHIVE_DIR}/dtj" "${INSTALL_DIR}/dtj"
-  install -m 0755 "${ARCHIVE_DIR}/dtj-agent" "${INSTALL_DIR}/dtj-agent"
-else
-  cp "${ARCHIVE_DIR}/dtj" "${INSTALL_DIR}/dtj"
-  cp "${ARCHIVE_DIR}/dtj-agent" "${INSTALL_DIR}/dtj-agent"
-  chmod 0755 "${INSTALL_DIR}/dtj"
-  chmod 0755 "${INSTALL_DIR}/dtj-agent"
-fi
+# Copy to a hidden temp file in the target dir, then rename atomically.
+# This avoids leaving a half-written binary if the copy is interrupted.
+DTJ_TMP="${INSTALL_DIR}/.dtj-$$"
+AGENT_TMP="${INSTALL_DIR}/.dtj-agent-$$"
 
-# ── Smoke test ────────────────────────────────────────────────────────────────
+cp "${ARCHIVE_DIR}/dtj" "${DTJ_TMP}"
+cp "${ARCHIVE_DIR}/dtj-agent" "${AGENT_TMP}"
+
+# Set permissions before making visible
+chmod 0755 "${DTJ_TMP}"
+chmod 0755 "${AGENT_TMP}"
+
+# Atomic rename to final names
+mv "${DTJ_TMP}" "${INSTALL_DIR}/dtj"
+mv "${AGENT_TMP}" "${INSTALL_DIR}/dtj-agent"
+
+# ── Post-install version smoke test ──────────────────────────────────────────
 
 INSTALLED_VERSION=$("${INSTALL_DIR}/dtj" --version 2>&1 | awk '{print $2}')
-if [[ "${INSTALLED_VERSION}" != "${VERSION:-${TAG#v}}" ]]; then
-  echo "FAIL: version smoke mismatch (expected ${VERSION:-${TAG#v}}, got ${INSTALLED_VERSION})" >&2
+EXPECTED_VERSION="${VERSION:-$(echo "${TAG}" | sed 's/^v//')}"
+if [[ "${INSTALLED_VERSION}" != "${EXPECTED_VERSION}" ]]; then
+  echo "FAIL: version smoke mismatch (expected ${EXPECTED_VERSION}, got ${INSTALLED_VERSION})" >&2
   exit 1
 fi
 
 INSTALLED_AGENT_VERSION=$("${INSTALL_DIR}/dtj-agent" --version 2>&1 | awk '{print $2}')
-if [[ "${INSTALLED_AGENT_VERSION}" != "${VERSION:-${TAG#v}}" ]]; then
-  echo "FAIL: agent version smoke mismatch (expected ${VERSION:-${TAG#v}}, got ${INSTALLED_AGENT_VERSION})" >&2
+if [[ "${INSTALLED_AGENT_VERSION}" != "${EXPECTED_VERSION}" ]]; then
+  echo "FAIL: agent version smoke mismatch (expected ${EXPECTED_VERSION}, got ${INSTALLED_AGENT_VERSION})" >&2
   exit 1
 fi
 
