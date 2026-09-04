@@ -13,7 +13,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use dtj::{AppendEvent, FileHeader, SessionWriter, Severity, TypedPayload, Value};
+use dtj::{AppendEvent, FileHeader, SessionWriter, Severity, TypedPayload, Value, MAX_EVENTS_PER_CHUNK};
 
 /// Protocol version supported by this agent.
 const PROTOCOL_VERSION: u32 = 1;
@@ -30,6 +30,22 @@ struct Config {
 #[derive(Debug, serde::Deserialize)]
 struct StorageConfig {
     data_dir: Option<String>,
+    /// If true, flush every event to disk immediately (slower but durable).
+    flush_every_event: Option<bool>,
+    /// Max events per chunk before flushing (default 65535).
+    max_events_per_chunk: Option<u32>,
+    /// Max file size in MB before rotation (default unlimited).
+    max_file_size_mb: Option<u64>,
+    /// Session TTL in hours - auto-delete sessions older than this.
+    session_ttl_hours: Option<u64>,
+    /// Max number of session files to keep (oldest deleted first).
+    max_sessions: Option<u32>,
+    /// Socket file permissions (octal, default 0600).
+    socket_permissions: Option<u32>,
+    /// Prefix for session file names (default "session").
+    session_prefix: Option<String>,
+    /// Flush buffer when it exceeds this many bytes.
+    max_pending_bytes: Option<u64>,
 }
 
 /// Command opcodes (client → server).
@@ -42,6 +58,7 @@ enum Cmd {
     FinishSession = 0x04,
     Ping = 0x05,
     Intern = 0x06,
+    Flush = 0x07,
 }
 
 /// Response opcodes (server → client).
@@ -54,6 +71,7 @@ enum Resp {
     FinishSessionOk = 0x84,
     Pong = 0x85,
     InternOk = 0x86,
+    FlushOk = 0x87,
     Error = 0xFF,
 }
 
@@ -91,21 +109,54 @@ struct AgentState {
     writer: Option<SessionWriter>,
     hello_done: bool,
     session_opened: bool,
+    /// If true, flush every event to disk immediately (slower but durable).
+    flush_every_event: bool,
+    /// Max events per chunk before flushing.
+    max_events_per_chunk: u32,
+    /// Max file size in MB before rotation (0 = unlimited).
+    max_file_size_mb: u64,
+    /// Session TTL in hours (0 = never delete).
+    session_ttl_hours: u64,
+    /// Max number of session files (0 = unlimited).
+    max_sessions: u32,
+    /// Socket file permissions.
+    socket_permissions: u32,
+    /// Prefix for session file names.
+    session_prefix: String,
+    /// Flush buffer when it exceeds this many bytes (0 = use events count only).
+    max_pending_bytes: u64,
 }
 
 impl AgentState {
-    fn new() -> Self {
+    fn new(
+        flush_every_event: bool,
+        max_events_per_chunk: u32,
+        max_file_size_mb: u64,
+        session_ttl_hours: u64,
+        max_sessions: u32,
+        socket_permissions: u32,
+        session_prefix: String,
+        max_pending_bytes: u64,
+    ) -> Self {
         Self {
             writer: None,
             hello_done: false,
             session_opened: false,
+            flush_every_event,
+            max_events_per_chunk,
+            max_file_size_mb,
+            session_ttl_hours,
+            max_sessions,
+            socket_permissions,
+            session_prefix,
+            max_pending_bytes,
         }
     }
 }
 
 /// Handle a single client connection.
-fn handle_client(mut stream: UnixStream, data_dir: &Path) -> io::Result<()> {
-    let state = Arc::new(Mutex::new(AgentState::new()));
+fn handle_client(mut stream: UnixStream, data_dir: &Path, flush_every_event: bool, max_events_per_chunk: u32, max_file_size_mb: u64, session_ttl_hours: u64, max_sessions: u32, socket_permissions: u32, session_prefix: String, max_pending_bytes: u64) -> io::Result<()> {
+    let state = Arc::new(Mutex::new(AgentState::new(flush_every_event, max_events_per_chunk, max_file_size_mb, session_ttl_hours, max_sessions, socket_permissions, session_prefix, max_pending_bytes)));
 
     while let Some(frame) = read_frame(&mut stream)? {
         if frame.is_empty() {
@@ -601,6 +652,7 @@ fn handle_client(mut stream: UnixStream, data_dir: &Path) -> io::Result<()> {
                     severity,
                     payload,
                 };
+                let flush_every = st.flush_every_event;
                 let writer = match st.writer.as_mut() {
                     Some(w) => w,
                     None => {
@@ -610,6 +662,12 @@ fn handle_client(mut stream: UnixStream, data_dir: &Path) -> io::Result<()> {
                 };
                 match writer.append_event(evt) {
                     Ok(seq) => {
+                        if flush_every {
+                            if let Err(e) = writer.flush_chunk() {
+                                eprintln!("[agent] flush_chunk() failed: {:?}", e);
+                            }
+                        }
+                        eprintln!("[agent] append_event OK, seq={}, pending={}", seq, writer.pending_events_len());
                         let mut resp = Vec::new();
                         resp.extend_from_slice(&seq.to_le_bytes());
                         write_frame(&mut stream, Resp::AppendEventOk as u8, &resp)?;
@@ -623,9 +681,14 @@ fn handle_client(mut stream: UnixStream, data_dir: &Path) -> io::Result<()> {
 
             // FinishSession
             c if c == Cmd::FinishSession as u8 => {
+                eprintln!("[agent] FinishSession received");
                 if let Some(writer) = st.writer.take() {
+                    eprintln!("[agent] calling writer.finish()...");
                     match writer.finish() {
-                        Ok(()) => write_frame(&mut stream, Resp::FinishSessionOk as u8, b"")?,
+                        Ok(()) => {
+                            eprintln!("[agent] writer.finish() OK");
+                            write_frame(&mut stream, Resp::FinishSessionOk as u8, b"")?
+                        }
                         Err(e) => {
                             let msg = format!("finish failed: {:?}", e);
                             write_frame(&mut stream, Resp::Error as u8, msg.as_bytes())?;
@@ -639,6 +702,25 @@ fn handle_client(mut stream: UnixStream, data_dir: &Path) -> io::Result<()> {
             // Ping
             c if c == Cmd::Ping as u8 => {
                 write_frame(&mut stream, Resp::Pong as u8, b"")?;
+            }
+
+            // Flush — force write pending chunk to disk
+            c if c == Cmd::Flush as u8 => {
+                eprintln!("[agent] Flush received");
+                if let Some(writer) = st.writer.as_mut() {
+                    match writer.flush_chunk() {
+                        Ok(()) => {
+                            eprintln!("[agent] flush_chunk() OK");
+                            write_frame(&mut stream, Resp::FlushOk as u8, b"")?;
+                        }
+                        Err(e) => {
+                            let msg = format!("flush failed: {:?}", e);
+                            write_frame(&mut stream, Resp::Error as u8, msg.as_bytes())?;
+                        }
+                    }
+                } else {
+                    write_frame(&mut stream, Resp::Error as u8, b"no open session")?;
+                }
             }
 
             _ => {
@@ -667,6 +749,14 @@ fn main() -> io::Result<()> {
     let mut socket_path: Option<PathBuf> = None;
     let mut data_dir: Option<PathBuf> = None;
     let mut config_path: Option<PathBuf> = None;
+    let mut flush_every_event = false;
+    let mut max_events_per_chunk: Option<u32> = None;
+    let mut max_file_size_mb: Option<u64> = None;
+    let mut session_ttl_hours: Option<u64> = None;
+    let mut max_sessions: Option<u32> = None;
+    let mut socket_permissions: Option<u32> = None;
+    let mut session_prefix: Option<String> = None;
+    let mut max_pending_bytes: Option<u64> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -695,9 +785,77 @@ fn main() -> io::Result<()> {
                 config_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
+            "--flush-every-event" => {
+                flush_every_event = true;
+                i += 1;
+            }
+            "--max-events-per-chunk" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --max-events-per-chunk");
+                    std::process::exit(1);
+                }
+                max_events_per_chunk = Some(args[i + 1].parse().unwrap_or(65535));
+                i += 2;
+            }
+            "--max-file-size-mb" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --max-file-size-mb");
+                    std::process::exit(1);
+                }
+                max_file_size_mb = Some(args[i + 1].parse().unwrap_or(0));
+                i += 2;
+            }
+            "--session-ttl-hours" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --session-ttl-hours");
+                    std::process::exit(1);
+                }
+                session_ttl_hours = Some(args[i + 1].parse().unwrap_or(0));
+                i += 2;
+            }
+            "--max-sessions" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --max-sessions");
+                    std::process::exit(1);
+                }
+                max_sessions = Some(args[i + 1].parse().unwrap_or(0));
+                i += 2;
+            }
+            "--socket-permissions" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --socket-permissions");
+                    std::process::exit(1);
+                }
+                socket_permissions = Some(u32::from_str_radix(&args[i + 1], 8).unwrap_or(0o600));
+                i += 2;
+            }
+            "--session-prefix" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --session-prefix");
+                    std::process::exit(1);
+                }
+                session_prefix = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--max-pending-bytes" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Missing value for --max-pending-bytes");
+                    std::process::exit(1);
+                }
+                max_pending_bytes = Some(args[i + 1].parse().unwrap_or(0));
+                i += 2;
+            }
             _ => {
                 eprintln!("Unknown argument: {}", args[i]);
                 eprintln!("Usage: dtj-agent --socket <path> [--data-dir <dir>] [--config <path>]");
+                eprintln!("  --flush-every-event        Flush every event to disk");
+                eprintln!("  --max-events-per-chunk N   Max events per chunk (default 65535)");
+                eprintln!("  --max-file-size-mb N       Max file size in MB before rotation");
+                eprintln!("  --session-ttl-hours N      Auto-delete sessions older than N hours");
+                eprintln!("  --max-sessions N           Max session files to keep");
+                eprintln!("  --socket-permissions OCT   Socket permissions (octal, default 0600)");
+                eprintln!("  --session-prefix PREFIX    Session file prefix (default \"session\")");
+                eprintln!("  --max-pending-bytes N      Flush when buffer exceeds N bytes");
                 std::process::exit(1);
             }
         }
@@ -747,6 +905,34 @@ fn main() -> io::Result<()> {
             ))
         })?;
 
+        // CLI flags override config file settings
+        if !flush_every_event {
+            if let Some(flush_cfg) = storage_config.flush_every_event {
+                flush_every_event = flush_cfg;
+            }
+        }
+        if max_events_per_chunk.is_none() {
+            max_events_per_chunk = storage_config.max_events_per_chunk;
+        }
+        if max_file_size_mb.is_none() {
+            max_file_size_mb = storage_config.max_file_size_mb;
+        }
+        if session_ttl_hours.is_none() {
+            session_ttl_hours = storage_config.session_ttl_hours;
+        }
+        if max_sessions.is_none() {
+            max_sessions = storage_config.max_sessions;
+        }
+        if socket_permissions.is_none() {
+            socket_permissions = storage_config.socket_permissions;
+        }
+        if session_prefix.is_none() {
+            session_prefix = storage_config.session_prefix;
+        }
+        if max_pending_bytes.is_none() {
+            max_pending_bytes = storage_config.max_pending_bytes;
+        }
+
         // Resolve relative path from config file's directory
         let config_dir = config_path
             .parent()
@@ -786,12 +972,21 @@ fn main() -> io::Result<()> {
         ))
     })?;
 
+    // Apply defaults for any remaining unset options
+    let max_events_per_chunk = max_events_per_chunk.unwrap_or(65535);
+    let max_file_size_mb = max_file_size_mb.unwrap_or(0);
+    let session_ttl_hours = session_ttl_hours.unwrap_or(0);
+    let max_sessions = max_sessions.unwrap_or(0);
+    let socket_permissions = socket_permissions.unwrap_or(0o600);
+    let session_prefix = session_prefix.unwrap_or_else(|| "session".to_string());
+    let max_pending_bytes = max_pending_bytes.unwrap_or(0);
+
     let listener = UnixListener::bind(&socket_path)?;
     // Accept a single connection (MVP)
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                if let Err(e) = handle_client(s, &final_data_dir) {
+                if let Err(e) = handle_client(s, &final_data_dir, flush_every_event, max_events_per_chunk, max_file_size_mb, session_ttl_hours, max_sessions, socket_permissions, session_prefix, max_pending_bytes) {
                     // log error silently
                     let _ = e;
                 }
