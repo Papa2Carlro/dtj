@@ -315,11 +315,14 @@ jobs:
       - name: Generate SHA256SUMS (deterministic order)
         run: |
           set -euo pipefail
+          : > SHA256SUMS
           # Collect all tarballs (may be in subdirs) and sort lexicographically.
-          TARBALLS=($(find artifacts -name '*.tar.gz' | sort))
-          sha256sum "${TARBALLS[@]}" > SHA256SUMS
+          # Write only basenames so the manifest is portable across download layouts.
+          while IFS= read -r file; do
+            hash="$(sha256sum "$file" | awk '{print $1}')"
+            printf '%s  %s\n' "$hash" "$(basename "$file")" >> SHA256SUMS
+          done < <(find artifacts -name '*.tar.gz' | sort)
           echo "---- SHA256SUMS ----"
-          cat SHA256SUMS
           cat SHA256SUMS
           echo "---- entries: $(wc -l < SHA256SUMS) ----"
 
