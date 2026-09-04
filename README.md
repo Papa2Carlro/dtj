@@ -59,6 +59,9 @@ DTJ `v0.1` targets the following platforms:
 ## Quick Start
 
 ```bash
+# Install on macOS (Homebrew — recommended)
+brew install Papa2Carlro/dtj/dtj
+
 # Read a .dtj session
 dtj read-session path/to/session.dtj
 ```
@@ -101,9 +104,24 @@ dtj-v<VERSION>-aarch64-unknown-linux-gnu.tar.gz
 
 Pick the archive that matches your platform and architecture.
 
-### Quick install
+### macOS — Homebrew (recommended)
 
-The official installer works on macOS and Linux and requires no root:
+On macOS, the recommended install method is [Homebrew](https://brew.sh):
+
+```bash
+brew install Papa2Carlro/dtj/dtj
+```
+
+One command installs both binaries — `dtj` and `dtj-agent`. No separate
+`dtj-agent` formula exists.
+
+Supported architectures: **Apple Silicon (arm64)** and **Intel (x86_64)**.
+
+The Homebrew tap is at [Papa2Carlro/homebrew-dtj](https://github.com/Papa2Carlro/homebrew-dtj).
+
+### Linux — install.sh (recommended)
+
+The official installer works on Linux and requires no root:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Papa2Carlro/dtj/master/install.sh -o install.sh
