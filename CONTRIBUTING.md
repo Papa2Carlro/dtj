@@ -13,7 +13,7 @@ exclusionary behavior. You're representing this project to the community.
 
 ### 1. Report Issues
 
-Use the GitHub Issues (once the canonical repo is created). When reporting:
+Use the GitHub Issues at https://github.com/Papa2Carlro/dtj/issues. When reporting:
 - Use the issue template
 - Include `dtj --version` output
 - Include OS and Rust version (`rustc --version`)
@@ -22,7 +22,7 @@ Use the GitHub Issues (once the canonical repo is created). When reporting:
 
 ### 2. Bug Fixes
 
-1. Fork the repository (once created on GitHub)
+1. Fork the repository at https://github.com/Papa2Carlro/dtj
 2. Create a branch: `git checkout -b fix/issue-description`
 3. Write a test that reproduces the bug (see `dtj/fixtures/` for conventions)
 4. Run existing tests: `cargo test` from `dtj/`
@@ -72,7 +72,7 @@ alternative arrangement will be discussed.
 
 ```bash
 # Clone
-git clone https://github.com/<owner>/dtj.git
+git clone https://github.com/Papa2Carlro/dtj.git
 cd dtj
 
 # Build

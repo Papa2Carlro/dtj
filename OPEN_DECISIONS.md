@@ -4,43 +4,48 @@ This document captures explicit unresolved decisions for the DTJ project.
 
 ## License
 
-**Status: Unresolved**
+**Status: Resolved** for v0.1
 
-The project has MIT AND Apache-2.0 dual licenses (LICENSE-MIT, LICENSE-APACHE),
-but which license applies to which components, or if a single license should be
-chosen, has not been explicitly decided.
+All currently shipping packages (`crates/dtj`, `packages/dtj-rust`,
+`packages/dtj-python`, `packages/dtj-typescript`) declare
+`MIT OR Apache-2.0` in their manifests. The dual-licensed `LICENSE-MIT` and
+`LICENSE-APACHE` files in the repository root apply to all current source.
 
-**Action needed**: Project team must decide and document:
-- Whether dual-licensing is intentional or a temporary measure
-- Which license applies to the Rust core (`crates/dtj/`)
-- Which license applies to Python MCP (`packages/dtj-mcp/`)
-- Which license applies to VS Code integration (`packages/dtj-vscode/`)
-- Whether a FOSS exception or additional terms are needed
+This means each component is available under either license at the user's
+choice. Dual-licensing is intentional, not a temporary measure.
+
+Future packages adopting a different license will be documented per-package at
+their introduction.
 
 ## Repository Name
 
-**Status: Unresolved**
+**Status: Resolved** for v0.1
 
-The canonical repository name/organization has not been finalized.
+Canonical repository:
 
-**Options under consideration**:
-- `github.com/dtj-standard/dtj`
-- `github.com/dtjorg/dtj`
-- `github.com/debug-trace/dtj`
+```
+https://github.com/Papa2Carlro/dtj
+```
 
-**Action needed**: Choose and announce canonical repository name.
+This is the public location for the v0.1 release. References in `README.md`
+and `CONTRIBUTING.md` point to this URL. The previously considered
+placeholder organizations (`dtj-standard`, `dtjorg`, `debug-trace`) are
+**not** canonical and should not be used in user-facing material.
 
 ## Repository Hosting
 
-**Status: Pending**
+**Status: Resolved** for v0.1
 
-Remote GitHub repository has not been created yet.
+Remote is hosted on GitHub:
 
-**Constraint**: Per task rules, no `git push`, `git submodule`, or `GitHub repo` creation
-should be performed as part of this migration.
+```
+git remote -v
+origin  https://github.com/Papa2Carlro/dtj.git (fetch)
+origin  https://github.com/Papa2Carlro/dtj.git (push)
+```
 
-**Action needed**: Repository URL placeholder to be used in documentation until
-remote hosting is arranged externally.
+GitHub Releases on this repository are the canonical source of `dtj` and
+`dtj-agent` binary artifacts for v0.1.
 
 ## Pro Tier Pricing and Features
 
