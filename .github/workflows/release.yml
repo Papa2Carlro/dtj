@@ -1,0 +1,355 @@
+# DTJ v0.1 — Release workflow
+#
+# Builds canonical binary release artifacts for the 4 supported v0.1 targets
+# (aarch64/x86_64 macOS, x86_64/aarch64 Linux gnu), packages each into a
+# deterministic tarball, computes SHA256SUMS, and publishes them as a
+# GitHub Release for the triggering tag.
+#
+# See README.md "Platform Support (v0.1)" for the canonical policy.
+#
+# Trigger model:
+#   - tag push    (vX.Y.Z)           → full pipeline, creates the release
+#   - workflow_dispatch             → validate + build + package only,
+#                                      NO GitHub Release is created from
+#                                      a manual run. Manual dispatch is a
+#                                      diagnostic surface only.
+#
+# Intentionally does NOT:
+#   - cross-compile to Windows (deferred) or musl (not officially supported)
+#   - overwrite an existing release / clobber already-published assets
+#   - sign binaries (deferred — see release architecture audit)
+#   - publish SDKs (separate tracks)
+#   - hardcode the repository owner/name (uses ${{ github.repository }})
+#   - use `curl | bash` style installation
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Reserved for future dry-run toggle. Manual dispatch never creates a GitHub Release."
+        required: false
+        default: "true"
+
+# Cancel in-progress runs for the same tag when a new commit/tag arrives.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Version identity gate (runs before any build matrix job).
+  # - tag vX.Y.Z must equal Cargo.toml package version (without leading "v")
+  # - aborts the whole pipeline if they disagree
+  # ---------------------------------------------------------------------------
+  validate:
+    name: "validate · tag ↔ package version"
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      is_tag: ${{ steps.parse.outputs.is_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history not required; we only need refs/tags/* for tag push.
+          fetch-depth: 1
+
+      - id: parse
+        name: Parse tag + Cargo.toml version
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Resolve tag from GITHUB_REF (refs/tags/vX.Y.Z) or ref_name on PR/branch.
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            IS_TAG="true"
+          else
+            TAG=""
+            IS_TAG="false"
+          fi
+
+          PKG_VERSION="$(grep -E '^version[[:space:]]*=' crates/dtj/Cargo.toml \
+              | head -n1 \
+              | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
+
+          if [[ -z "${PKG_VERSION}" ]]; then
+            echo "FAIL: could not parse version from crates/dtj/Cargo.toml" >&2
+            exit 1
+          fi
+
+          echo "tag=${TAG}"
+          echo "is_tag=${IS_TAG}"
+          echo "pkg_version=${PKG_VERSION}"
+
+          if [[ "${IS_TAG}" == "true" ]]; then
+            STRIPPED_TAG="${TAG#v}"
+            if [[ "${STRIPPED_TAG}" != "${PKG_VERSION}" ]]; then
+              echo "FAIL: tag '${TAG}' (${STRIPPED_TAG}) does not match " >&2
+              echo "      Cargo package version '${PKG_VERSION}' in crates/dtj/Cargo.toml" >&2
+              exit 1
+            fi
+          fi
+
+          echo "version=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Build matrix — one job per supported target, each on a NATIVE runner.
+  # Each job:
+  #   1. runs the test suite (cargo test)
+  #   2. builds the release binaries natively
+  #   3. packages via scripts/release/package.sh (asserts binary --version)
+  #   4. uploads the resulting tarball as an artifact
+  # A failing test or failing package step fails the whole release.
+  # ---------------------------------------------------------------------------
+  build-aarch64-apple-darwin:
+    name: "build · aarch64-apple-darwin"
+    needs: validate
+    if: ${{ needs.validate.outputs.is_tag == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo test
+        working-directory: crates/dtj
+        run: cargo test
+
+      - name: cargo build --release (dtj, dtj-agent)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj --bin dtj-agent
+
+      - name: Package release tarball
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TARGET: aarch64-apple-darwin
+        run: |
+          set -euo pipefail
+          ARTIFACT="$(bash scripts/release/package.sh "${VERSION}" "${TARGET}" target/release)"
+          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          # Diagnostic: confirm architecture without using text parsing as truth.
+          file "${ARTIFACT}" || true
+        id: package
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtj-v${{ needs.validate.outputs.version }}-aarch64-apple-darwin
+          path: ${{ steps.package.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 7
+
+  build-x86_64-apple-darwin:
+    name: "build · x86_64-apple-darwin"
+    needs: validate
+    if: ${{ needs.validate.outputs.is_tag == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo test
+        working-directory: crates/dtj
+        run: cargo test
+
+      - name: cargo build --release (dtj, dtj-agent)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj --bin dtj-agent
+
+      - name: Package release tarball
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TARGET: x86_64-apple-darwin
+        run: |
+          set -euo pipefail
+          ARTIFACT="$(bash scripts/release/package.sh "${VERSION}" "${TARGET}" target/release)"
+          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          file "${ARTIFACT}" || true
+        id: package
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtj-v${{ needs.validate.outputs.version }}-x86_64-apple-darwin
+          path: ${{ steps.package.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 7
+
+  build-x86_64-unknown-linux-gnu:
+    name: "build · x86_64-unknown-linux-gnu"
+    needs: validate
+    if: ${{ needs.validate.outputs.is_tag == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo test
+        working-directory: crates/dtj
+        run: cargo test
+
+      - name: cargo build --release (dtj, dtj-agent)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj --bin dtj-agent
+
+      - name: Package release tarball
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TARGET: x86_64-unknown-linux-gnu
+        run: |
+          set -euo pipefail
+          ARTIFACT="$(bash scripts/release/package.sh "${VERSION}" "${TARGET}" target/release)"
+          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          file "${ARTIFACT}" || true
+        id: package
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtj-v${{ needs.validate.outputs.version }}-x86_64-unknown-linux-gnu
+          path: ${{ steps.package.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 7
+
+  build-aarch64-unknown-linux-gnu:
+    name: "build · aarch64-unknown-linux-gnu"
+    needs: validate
+    if: ${{ needs.validate.outputs.is_tag == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo test
+        working-directory: crates/dtj
+        run: cargo test
+
+      - name: cargo build --release (dtj, dtj-agent)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj --bin dtj-agent
+
+      - name: Package release tarball
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TARGET: aarch64-unknown-linux-gnu
+        run: |
+          set -euo pipefail
+          ARTIFACT="$(bash scripts/release/package.sh "${VERSION}" "${TARGET}" target/release)"
+          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          file "${ARTIFACT}" || true
+        id: package
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtj-v${{ needs.validate.outputs.version }}-aarch64-unknown-linux-gnu
+          path: ${{ steps.package.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Release publication
+  # - downloads the 4 tarballs
+  # - computes a deterministic SHA256SUMS file
+  # - creates (or fails on existing) a GitHub Release for the tag
+  # - uploads the 4 tarballs + SHA256SUMS as release assets
+  #
+  # Manual dispatch is excluded here: workflow_dispatch may exercise the build
+  # matrix, but this job only runs for real tag pushes. This prevents a
+  # developer from accidentally publishing a release without a tag/version.
+  # ---------------------------------------------------------------------------
+  release:
+    name: "release · GitHub Release"
+    needs:
+      - validate
+      - build-aarch64-apple-darwin
+      - build-x86_64-apple-darwin
+      - build-x86_64-unknown-linux-gnu
+      - build-aarch64-unknown-linux-gnu
+    if: ${{ needs.validate.outputs.is_tag == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: Verify exactly 4 tarballs present
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          TARBALLS=(artifacts/*.tar.gz)
+          COUNT="${#TARBALLS[@]}"
+          echo "found ${COUNT} tarball(s)"
+          if [[ "${COUNT}" -ne 4 ]]; then
+            echo "FAIL: expected exactly 4 tarballs, got ${COUNT}" >&2
+            printf '  - %s\n' "${TARBALLS[@]}" >&2
+            exit 1
+          fi
+          # Print sorted list for deterministic ordering downstream.
+          printf '%s\n' "${TARBALLS[@]}" | sort
+
+      - name: Generate SHA256SUMS (deterministic order)
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          # Sort filenames lexicographically for a stable checksum file.
+          sha256sum $(ls *.tar.gz | sort) > SHA256SUMS
+          echo "---- SHA256SUMS ----"
+          cat SHA256SUMS
+          echo "---- entries: $(wc -l < SHA256SUMS) ----"
+
+      - name: Detect already-published tag/release (fail-loud)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Fail loudly if a release for this tag already exists.
+          # Refuses to silently overwrite published binaries.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "FAIL: a GitHub Release for tag '${TAG}' already exists." >&2
+            echo "      Refusing to overwrite published assets." >&2
+            echo "      Delete the existing release first or cut a new tag." >&2
+            exit 1
+          fi
+          echo "no existing release for tag '${TAG}' — proceeding"
+
+      - name: Create GitHub Release + upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+
+          # Use GitHub's auto-generated release notes; do not fabricate a
+          # changelog by hand in this workflow.
+          gh release create "${TAG}" \
+              --repo "${{ github.repository }}" \
+              --title "DTJ v${VERSION}" \
+              --generate-notes \
+              *.tar.gz SHA256SUMS

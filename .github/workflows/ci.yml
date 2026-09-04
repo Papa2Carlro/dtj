@@ -1,0 +1,284 @@
+# DTJ v0.1 — CI workflow
+#
+# Verifies the supported v0.1 platforms and Rust SDK on every push and pull_request.
+# See README.md "Platform Support (v0.1)" for the canonical policy.
+#
+# This workflow intentionally does NOT:
+#   - publish releases / GitHub Release artifacts
+#   - build musl targets (not officially supported in v0.1)
+#   - run Windows jobs (deferred / unsupported in v0.1)
+#   - publish SDKs to crates.io / npm / PyPI / Go module proxy
+#   - mask failures with continue-on-error
+#
+# Job overview:
+#   core-linux-x86_64       — native tests + release build on ubuntu-latest
+#   core-macos-arm64        — native tests + release build on macos-15 (M1, arm64)
+#   core-macos-x86_64       — native tests + release build on macos-26-intel
+#   core-linux-arm64        — native tests + release build on ubuntu-24.04-arm
+#   sdk-rust-linux-x86_64   — Rust SDK fmt/check/test/clippy/doc/package
+#                              + opt-in real-agent E2E (DTJ_RUN_AGENT_E2E=1)
+#                              using dtj-agent built in this job.
+#
+# Runner labels are pinned to specific OS versions (not `*-latest` aliases) so
+# the support matrix is stable across GitHub image rollovers.
+
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Cancel in-progress runs for the same ref when a new commit arrives.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Core crate: native x86_64 Linux — full gate set
+  # ---------------------------------------------------------------------------
+  core-linux-x86_64:
+    name: "core · linux x86_64 · native"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/dtj/target
+          key: cargo-core-linux-x86_64-${{ hashFiles('crates/dtj/Cargo.toml') }}
+          restore-keys: |
+            cargo-core-linux-x86_64-
+
+      - name: cargo fmt --check
+        working-directory: crates/dtj
+        run: cargo fmt --check
+
+      - name: cargo check
+        working-directory: crates/dtj
+        run: cargo check
+
+      - name: cargo test
+        working-directory: crates/dtj
+        run: cargo test
+
+      - name: cargo clippy (-D warnings)
+        working-directory: crates/dtj
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo build --release (dtj, dtj-agent)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj --bin dtj-agent
+
+  # ---------------------------------------------------------------------------
+  # Core crate: native arm64 macOS — full gate set (M1 runner, pinned)
+  # ---------------------------------------------------------------------------
+  core-macos-arm64:
+    name: "core · macOS arm64 · native"
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/dtj/target
+          key: cargo-core-macos-arm64-${{ hashFiles('crates/dtj/Cargo.toml') }}
+          restore-keys: |
+            cargo-core-macos-arm64-
+
+      - name: cargo fmt --check
+        working-directory: crates/dtj
+        run: cargo fmt --check
+
+      - name: cargo check
+        working-directory: crates/dtj
+        run: cargo check
+
+      - name: cargo test
+        working-directory: crates/dtj
+        run: cargo test
+
+      - name: cargo clippy (-D warnings)
+        working-directory: crates/dtj
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo build --release (dtj, dtj-agent)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj --bin dtj-agent
+
+  # ---------------------------------------------------------------------------
+  # Core crate: native x86_64 macOS (Intel) — full gate set (pinned runner)
+  # ---------------------------------------------------------------------------
+  core-macos-x86_64:
+    name: "core · macOS x86_64 · native"
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/dtj/target
+          key: cargo-core-macos-x86_64-${{ hashFiles('crates/dtj/Cargo.toml') }}
+          restore-keys: |
+            cargo-core-macos-x86_64-
+
+      - name: cargo fmt --check
+        working-directory: crates/dtj
+        run: cargo fmt --check
+
+      - name: cargo check
+        working-directory: crates/dtj
+        run: cargo check
+
+      - name: cargo test
+        working-directory: crates/dtj
+        run: cargo test
+
+      - name: cargo clippy (-D warnings)
+        working-directory: crates/dtj
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo build --release (dtj, dtj-agent)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj --bin dtj-agent
+
+  # ---------------------------------------------------------------------------
+  # Core crate: native arm64 Linux — full gate set (pinned runner)
+  # ---------------------------------------------------------------------------
+  core-linux-arm64:
+    name: "core · linux arm64 · native"
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/dtj/target
+          key: cargo-core-linux-arm64-${{ hashFiles('crates/dtj/Cargo.toml') }}
+          restore-keys: |
+            cargo-core-linux-arm64-
+
+      - name: cargo fmt --check
+        working-directory: crates/dtj
+        run: cargo fmt --check
+
+      - name: cargo check
+        working-directory: crates/dtj
+        run: cargo check
+
+      - name: cargo test
+        working-directory: crates/dtj
+        run: cargo test
+
+      - name: cargo clippy (-D warnings)
+        working-directory: crates/dtj
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo build --release (dtj, dtj-agent)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj --bin dtj-agent
+
+  # ---------------------------------------------------------------------------
+  # Rust SDK: native x86_64 Linux
+  #   Builds dtj-agent in this job, then drives the opt-in E2E suite via
+  #   DTJ_RUN_AGENT_E2E=1 + DTJ_AGENT_PATH=<path>.
+  # ---------------------------------------------------------------------------
+  sdk-rust-linux-x86_64:
+    name: "sdk · rust · linux x86_64"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/dtj/target
+            packages/dtj-rust/target
+          key: cargo-sdk-rust-linux-x86_64-${{ hashFiles('crates/dtj/Cargo.toml', 'packages/dtj-rust/Cargo.toml') }}
+          restore-keys: |
+            cargo-sdk-rust-linux-x86_64-
+
+      - name: cargo fmt --check (Rust SDK)
+        working-directory: packages/dtj-rust
+        run: cargo fmt --check
+
+      - name: cargo check (Rust SDK)
+        working-directory: packages/dtj-rust
+        run: cargo check
+
+      - name: cargo test (Rust SDK)
+        working-directory: packages/dtj-rust
+        run: cargo test
+
+      - name: cargo clippy (-D warnings, Rust SDK)
+        working-directory: packages/dtj-rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo doc --no-deps (Rust SDK)
+        working-directory: packages/dtj-rust
+        run: cargo doc --no-deps
+
+      - name: cargo package (Rust SDK)
+        working-directory: packages/dtj-rust
+        run: cargo package
+
+      - name: cargo build --release dtj-agent (for opt-in E2E)
+        working-directory: crates/dtj
+        run: cargo build --release --bin dtj-agent
+
+      - name: Real-agent E2E (Rust SDK)
+        working-directory: packages/dtj-rust
+        env:
+          DTJ_RUN_AGENT_E2E: "1"
+          DTJ_AGENT_PATH: ${{ github.workspace }}/crates/dtj/target/release/dtj-agent
+          DTJ_BIN: ${{ github.workspace }}/crates/dtj/target/release/dtj
+        run: cargo test --test e2e
