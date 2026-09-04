@@ -8,7 +8,13 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-dtj_sdk = { path = "packages/dtj-rust" }
+dtj-sdk = "0.1.0"
+```
+
+Or with Cargo edit:
+
+```sh
+cargo add dtj-sdk
 ```
 
 ## Quick Start

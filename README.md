@@ -12,15 +12,12 @@ paid packs, or any commercial platform.
 **DTJ v0.1 release candidate.** Core CLI (`dtj`) and `dtj-agent` are implemented
 and tested across all supported platforms.
 
-SDKs source-available (locally tested) for:
+SDKs:
 
-- Rust
-- Python
-- Go
-- TypeScript
-
-Package-manager publication of SDKs (crates.io / PyPI / npm / Go module proxy)
-is a separate release track and is **not** part of the v0.1 binary release.
+- **Rust** — [dtj-sdk](https://crates.io/crates/dtj-sdk) v0.1.0 on crates.io
+- **Python** — source-available (locally tested)
+- **Go** — source-available (locally tested)
+- **TypeScript** — source-available (locally tested)
 
 ## Platform Support (v0.1)
 
