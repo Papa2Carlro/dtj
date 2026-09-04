@@ -101,6 +101,42 @@ dtj-v<VERSION>-aarch64-unknown-linux-gnu.tar.gz
 
 Pick the archive that matches your platform and architecture.
 
+### Quick install
+
+The official installer works on macOS and Linux and requires no root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Papa2Carlro/dtj/master/install.sh -o install.sh
+bash install.sh
+```
+
+Options:
+
+```bash
+# Install a specific version
+bash install.sh --version 0.1.1
+
+# Install to a custom directory
+bash install.sh --install-dir ~/.local/bin
+
+# Combine both
+bash install.sh --version 0.1.1 --install-dir ~/.local/bin
+```
+
+The installer detects your platform and architecture, downloads the matching
+release archive and its `SHA256SUMS` checksum file, verifies the archive before
+extracting anything, then copies the `dtj` and `dtj-agent` binaries to the
+target directory. A post-install smoke test confirms the binaries run correctly.
+
+> **No `curl | sh`:** the installer script is always saved to disk first and
+> reviewed before execution.
+
+If `~/.local/bin` is not yet on your `PATH`, add this line to your shell config:
+
+```bash
+export PATH="${HOME}/.local/bin:${PATH}"
+```
+
 ### Manual install
 
 Extract the archive:
