@@ -121,7 +121,9 @@ The Homebrew tap is at [Papa2Carlro/homebrew-dtj](https://github.com/Papa2Carlro
 
 ### Linux — install.sh (recommended)
 
-The official installer works on Linux and requires no root:
+The official installer works on macOS and Linux and is the recommended
+path on Linux. On macOS, Homebrew is the recommended install method;
+install.sh remains a supported portable alternative.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Papa2Carlro/dtj/master/install.sh -o install.sh
