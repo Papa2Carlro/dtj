@@ -176,4 +176,9 @@ impl SessionWriter {
             Ok(())
         }
     }
+
+    /// Returns the number of pending events not yet flushed to a chunk.
+    pub fn pending_events_len(&self) -> usize {
+        self.pending_events.len()
+    }
 }

@@ -1,0 +1,29 @@
+name: Go
+
+on:
+  push:
+    paths:
+      - 'packages/dtj-go/**'
+  pull_request:
+    paths:
+      - 'packages/dtj-go/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Test
+        run: cd packages/dtj-go && go test ./...
+
+      - name: go mod tidy
+        run: cd packages/dtj-go && go mod tidy
+
+      - name: Verify tidy
+        run: cd packages/dtj-go && git diff --exit-code go.sum

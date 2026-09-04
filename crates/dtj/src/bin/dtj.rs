@@ -44,6 +44,10 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        "ui-session" => {
+            let remaining: Vec<String> = args.collect();
+            ui_session_command(&remaining)
+        }
         "init" => {
             let apply = args.next().map(|s| s == "--apply").unwrap_or(false);
             if args.next().is_some() {
@@ -70,9 +74,264 @@ fn main() -> ExitCode {
     }
 }
 
+fn ui_session_command(args: &[String]) -> ExitCode {
+    let Some(subcmd) = args.first() else {
+        eprintln!("usage: dtj ui-session <hello|summary|events|event>");
+        return ExitCode::from(2);
+    };
+    let remaining = &args[1..];
+    match subcmd.as_str() {
+        "hello" => {
+            if !remaining.is_empty() {
+                eprintln!("usage: dtj ui-session hello");
+                return ExitCode::from(2);
+            }
+            let json = ui_hello_json();
+            if let Err(err) = writeln!(io::stdout(), "{json}") {
+                eprintln!("failed to write stdout: {err}");
+                return ExitCode::from(1);
+            }
+            ExitCode::SUCCESS
+        }
+        "summary" => {
+            let Some(path) = remaining.first() else {
+                eprintln!("usage: dtj ui-session summary <session.dtj>");
+                return ExitCode::from(2);
+            };
+            if remaining.len() > 1 {
+                eprintln!("usage: dtj ui-session summary <session.dtj>");
+                return ExitCode::from(2);
+            }
+            let json = ui_summary_json(&path);
+            if let Err(err) = writeln!(io::stdout(), "{json}") {
+                eprintln!("failed to write stdout: {err}");
+                return ExitCode::from(1);
+            }
+            ExitCode::SUCCESS
+        }
+        "events" => {
+            let result = ui_events_command(remaining);
+            if let Err(err) = writeln!(io::stdout(), "{result}") {
+                eprintln!("failed to write stdout: {err}");
+                return ExitCode::from(1);
+            }
+            ExitCode::SUCCESS
+        }
+        "event" => {
+            let result = ui_event_command(remaining);
+            if let Err(err) = writeln!(io::stdout(), "{result}") {
+                eprintln!("failed to write stdout: {err}");
+                return ExitCode::from(1);
+            }
+            ExitCode::SUCCESS
+        }
+        other => {
+            eprintln!("unknown ui-session operation: {other}");
+            eprintln!("usage: dtj ui-session <hello|summary|events|event>");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn ui_hello_json() -> String {
+    r#"{"ok":true,"operation":"hello","protocol_version":1,"result":{"capabilities":["summary","events","event"],"limits":{"events_page_default":100,"events_page_max":256,"stdout_max_bytes":"2097152"},"ui_protocol_version":1}}"#.to_string()
+}
+
+fn ui_summary_json(session_path: &str) -> String {
+    match SessionReader::open(Path::new(session_path)) {
+        Ok(reader) => {
+            let header = reader.header();
+            let mut out = String::with_capacity(512);
+            out.push_str(r#"{"ok":true,"operation":"summary","protocol_version":1,"result":{"header":{"format_version":"#);
+            out.push_str(&header.format_version.to_string());
+            out.push_str(r#","flags":"#);
+            out.push_str(&header.flags.to_string());
+            out.push_str(r#"","session_id_hex":""#);
+            out.push_str(&hex_bytes(&header.session_id));
+            out.push_str(r#"","start_utc_unix_ms":""#);
+            out.push_str(&header.start_utc_unix_ms.to_string());
+            out.push_str(r#"","mono_origin_ns":""#);
+            out.push_str(&header.mono_origin_ns.to_string());
+            out.push_str(r#"","producer_name":""#);
+            push_escaped(&mut out, &header.producer_name);
+            out.push_str(r#"","producer_version":""#);
+            push_escaped(&mut out, &header.producer_version);
+            out.push_str(r#"","chunks_committed":""#);
+            out.push_str(&reader.chunks_committed().to_string());
+            out.push_str(r#"","torn_tail":"#);
+            out.push_str(if reader.had_torn_tail() { "true" } else { "false" });
+            out.push_str(r#"","event_count":""#);
+            out.push_str(&reader.events().len().to_string());
+            out.push_str("}}");
+            out
+        }
+        Err(err) => ui_error_json("summary", session_path, &err),
+    }
+}
+
+fn ui_events_command(args: &[String]) -> String {
+    let mut path = None;
+    let mut offset: u64 = 0;
+    let mut limit: Option<u64> = None;
+
+    let mut args_iter = args.iter();
+    while let Some(arg) = args_iter.next() {
+        match arg.as_str() {
+            "--offset" => {
+                if let Some(v) = args_iter.next() {
+                    offset = v.parse().unwrap_or(0);
+                }
+            }
+            "--limit" => {
+                if let Some(v) = args_iter.next() {
+                    limit = Some(v.parse().unwrap_or(100));
+                }
+            }
+            _ if !arg.starts_with('-') && path.is_none() => {
+                path = Some(arg.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let Some(session_path) = path else {
+        return r#"{"ok":false,"error":{"kind":"InvalidArgument","message":"missing session path"},"operation":"events","protocol_version":1}"#.to_string();
+    };
+
+    let limit = limit.unwrap_or(100).min(256) as usize;
+
+    match SessionReader::open(Path::new(&session_path)) {
+        Ok(reader) => {
+            let events = reader.events();
+            let total = events.len();
+            let offset_usize = offset as usize;
+            let end = (offset_usize + limit).min(total);
+            
+            if offset_usize >= total {
+                return format!(r#"{{"ok":true,"operation":"events","protocol_version":1,"result":{{"events":[],"total":{total},"offset":{offset_usize},"limit":{limit}}},""#);
+            }
+
+            let mut out = String::with_capacity(2048);
+            out.push_str(&format!(r#"{{"ok":true,"operation":"events","protocol_version":1,"result":{{"events":["#));
+            
+            let dict = reader.dictionary();
+            for (i, ev) in events[offset_usize..end].iter().enumerate() {
+                if i > 0 { out.push(','); }
+                out.push('{');
+                out.push_str(&format!(r#""monotonic_ns":{},"event_sequence":{},"domain_id":{},"#,
+                    ev.monotonic_ns, ev.event_sequence, ev.domain_id));
+                out.push_str(&format!(r#""category_id":{},"event_name_id":{},"correlation_id":{},"#,
+                    ev.category_id, ev.event_name_id, ev.correlation_id));
+                out.push_str(r#""severity":""#);
+                out.push_str(severity_name(ev.severity));
+                out.push_str(r#","payload":["#);
+                for (j, field) in ev.payload.fields.iter().enumerate() {
+                    if j > 0 { out.push(','); }
+                    push_field_json(&mut out, dict, field.name_id, &field.value);
+                }
+                out.push_str("]}");
+            }
+            out.push_str(&format!(r#"],"total":{total},"offset":{offset_usize},"limit":{limit}}}"#));
+            out
+        }
+        Err(err) => ui_error_json("events", &session_path, &err),
+    }
+}
+
+fn ui_event_command(args: &[String]) -> String {
+    let mut path = None;
+    let mut sequence: Option<u64> = None;
+
+    let mut args_iter = args.iter();
+    while let Some(arg) = args_iter.next() {
+        match arg.as_str() {
+            "--sequence" => {
+                if let Some(v) = args_iter.next() {
+                    sequence = Some(v.parse().unwrap_or(0));
+                }
+            }
+            _ if !arg.starts_with('-') && path.is_none() => {
+                path = Some(arg.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let Some(session_path) = path else {
+        return r#"{"ok":false,"error":{"kind":"InvalidArgument","message":"missing session path"},"operation":"event","protocol_version":1}"#.to_string();
+    };
+
+    let Some(seq) = sequence else {
+        return r#"{"ok":false,"error":{"kind":"InvalidArgument","message":"missing --sequence"},"operation":"event","protocol_version":1}"#.to_string();
+    };
+
+    match SessionReader::open(Path::new(&session_path)) {
+        Ok(reader) => {
+            let events = reader.events();
+            match events.iter().find(|e| e.event_sequence == seq) {
+                Some(ev) => {
+                    let dict = reader.dictionary();
+                    let mut out = String::with_capacity(512);
+                    out.push_str(r#"{"ok":true,"operation":"event","protocol_version":1,"result":{"event":{"monotonic_ns":"#);
+                    out.push_str(&ev.monotonic_ns.to_string());
+                    out.push_str(r#"","event_sequence":""#);
+                    out.push_str(&ev.event_sequence.to_string());
+                    out.push_str(r#"","domain_id":""#);
+                    out.push_str(&ev.domain_id.to_string());
+                    out.push_str(r#"","category_id":""#);
+                    out.push_str(&ev.category_id.to_string());
+                    out.push_str(r#"","event_name_id":""#);
+                    out.push_str(&ev.event_name_id.to_string());
+                    out.push_str(r#"","correlation_id":""#);
+                    out.push_str(&ev.correlation_id.to_string());
+                    out.push_str(r#"","severity":""#);
+                    out.push_str(severity_name(ev.severity));
+                    out.push_str(r#"","payload":["#);
+                    for (i, field) in ev.payload.fields.iter().enumerate() {
+                        if i > 0 { out.push(','); }
+                        push_field_json(&mut out, dict, field.name_id, &field.value);
+                    }
+                    out.push_str("]}}}");
+                    out
+                }
+                None => {
+                    format!(r#"{{"ok":false,"error":{{"kind":"EventNotFound","message":"event {} not found"}},"operation":"event","protocol_version":1}}"#, seq)
+                }
+            }
+        }
+        Err(err) => ui_error_json("event", &session_path, &err),
+    }
+}
+
+fn ui_error_json(operation: &str, _session_path: &str, err: &Error) -> String {
+    let kind = match err {
+        Error::Io(_) => "Io",
+        Error::InvalidMagic => "InvalidMagic",
+        Error::UnsupportedVersion(_) => "UnsupportedVersion",
+        Error::InvalidHeaderSize(_) => "InvalidHeaderSize",
+        Error::InvalidEndian => "InvalidEndian",
+        Error::InvalidChunkMagic => "InvalidChunkMagic",
+        Error::ChecksumMismatch { .. } => "ChecksumMismatch",
+        Error::SequenceGap { .. } => "SequenceGap",
+        Error::PayloadTooLarge { .. } => "PayloadTooLarge",
+        Error::MalformedRecord(_) => "MalformedRecord",
+        Error::UnknownDictionaryId { .. } => "UnknownDictionaryId",
+        Error::DuplicateDictionaryId { .. } => "DuplicateDictionaryId",
+        Error::UnknownTypeTag(_) => "UnknownTypeTag",
+        Error::InvalidSeverity(_) => "InvalidSeverity",
+        Error::LimitExceeded(_) => "LimitExceeded",
+        Error::SessionClosed => "SessionClosed",
+    };
+    format!(r#"{{"ok":false,"error":{{"kind":"{}","message":"{}"}},"operation":"{}","protocol_version":1}}"#, kind, err, operation)
+}
+
 fn print_usage() {
     eprintln!("dtj — DTJ v1 reference CLI (adapter v{ADAPTER_VERSION})");
     eprintln!("  dtj read-session <session_path>");
+    eprintln!("  dtj ui-session hello");
+    eprintln!("  dtj ui-session summary <session.dtj>");
+    eprintln!("  dtj ui-session events <session.dtj> [--offset N] [--limit N] [--domain …]");
+    eprintln!("  dtj ui-session event <session.dtj> --sequence <u64>");
     eprintln!("  dtj init [--apply]");
 }
 

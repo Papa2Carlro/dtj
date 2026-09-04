@@ -1,9 +1,9 @@
 use crate::discovery::Discovery;
 use crate::owned_agent::OwnedAgent;
 use crate::protocol::{
-    read_append_event_ok, read_finish_session_ok_or_error, read_hello_ok_or_error, read_intern_ok,
-    read_open_session_ok_or_error, write_finish_session, write_hello, write_intern,
-    write_open_session,
+    read_append_event_ok, read_finish_session_ok_or_error, read_flush_ok_or_error, read_hello_ok_or_error,
+    read_intern_ok, read_open_session_ok_or_error, write_finish_session, write_flush, write_hello,
+    write_intern, write_open_session,
 };
 use crate::types::Value;
 use std::collections::HashMap;
@@ -536,6 +536,25 @@ impl Session {
         self.closed = true;
         self.cleanup();
         Ok(())
+    }
+
+    /// Flush pending events to disk without closing the session.
+    /// Allows viewing session contents in real-time.
+    pub fn flush(&mut self) -> Result<(), crate::error::Error> {
+        if self.closed {
+            return Err(crate::error::Error::SessionClosed);
+        }
+        if self.disabled {
+            return Ok(());
+        }
+
+        let stream = self.stream.as_mut().unwrap();
+        write_flush(stream)?;
+        match read_flush_ok_or_error(stream) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(crate::error::Error::Protocol),
+            Err(e) => Err(e),
+        }
     }
 
     /// Cleanup child process and temp directory

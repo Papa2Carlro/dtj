@@ -244,6 +244,28 @@ pub fn read_finish_session_ok_or_error<R: Read>(reader: &mut R) -> Result<bool, 
 }
 
 // =============================================================================
+// Flush / FlushOk
+// =============================================================================
+
+pub const OPCODE_FLUSH: u8 = 0x07;
+pub const OPCODE_FLUSH_OK: u8 = 0x87;
+
+pub fn write_flush<W: Write>(writer: &mut W) -> Result<(), Error> {
+    write_frame(writer, OPCODE_FLUSH, &[])
+}
+
+/// Read FlushOk or Error frame.
+/// Returns Ok(true) for FlushOk, Ok(false) for Error, Err for other frames.
+pub fn read_flush_ok_or_error<R: Read>(reader: &mut R) -> Result<bool, Error> {
+    let (opcode, payload) = read_frame(reader)?;
+    match opcode {
+        OPCODE_FLUSH_OK if payload.is_empty() => Ok(true),
+        OPCODE_ERROR => Ok(false),
+        _ => Err(Error::Protocol),
+    }
+}
+
+// =============================================================================
 // Error frame
 // =============================================================================
 
