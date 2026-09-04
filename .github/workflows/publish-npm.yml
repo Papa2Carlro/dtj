@@ -1,0 +1,52 @@
+# Publish TypeScript SDK to npm via Trusted Publishing (OIDC)
+#
+# Requirements:
+#   - npm Trusted Publisher configured at https://www.npmjs.com/settings/Papa2Carlro/packages/@dtj/sdk/trusted-publishers
+#     with: Repository = Papa2Carlro/dtj, Workflow = publish-npm.yml, Environment = npm
+#   - GitHub Environment "npm" created in the repository settings
+#   - No npm API tokens needed — OIDC handles authentication
+
+name: Publish TypeScript SDK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+
+    environment:
+      name: npm
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install dependencies
+        working-directory: packages/dtj-typescript
+        run: npm ci
+
+      - name: Run tests
+        working-directory: packages/dtj-typescript
+        run: npm test
+
+      - name: Build
+        working-directory: packages/dtj-typescript
+        run: npm run build
+
+      - name: Pack dry-run
+        working-directory: packages/dtj-typescript
+        run: npm pack --dry-run
+
+      - name: Publish package to npm
+        working-directory: packages/dtj-typescript
+        run: npm publish --access public --ignore-scripts
