@@ -652,6 +652,13 @@ fn handle_client(mut stream: UnixStream, data_dir: &Path) -> io::Result<()> {
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
+    // Handle --version / -V before any required-argument validation so users
+    // can identify the binary without supplying --socket / --data-dir / --config.
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("dtj-agent {}", env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
+
     // Parse arguments supporting both formats:
     // Old: dtj-agent --socket <path> --data-dir <dir>
     // New: dtj-agent --socket <path> --config <path>

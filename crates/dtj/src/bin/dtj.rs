@@ -24,6 +24,10 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     match cmd.as_str() {
+        "--version" | "-V" => {
+            println!("dtj {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
         "read-session" => {
             let Some(path) = args.next() else {
                 eprintln!("usage: dtj read-session <session_path>");
