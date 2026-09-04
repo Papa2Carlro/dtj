@@ -1,6 +1,6 @@
 [package]
 name = "dtj"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "DTJ v1 reference core — Debug Trace Journal byte format"
 license = "MIT OR Apache-2.0"
