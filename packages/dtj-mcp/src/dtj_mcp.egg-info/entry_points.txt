@@ -1,0 +1,3 @@
+[console_scripts]
+dtj = debug_trace_mcp.cli:main
+dtj-mcp = debug_trace_mcp.server:main

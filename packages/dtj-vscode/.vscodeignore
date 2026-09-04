@@ -1,0 +1,15 @@
+src/**
+src/__tests/**
+fixtures/**
+tsconfig.json
+vitest.config.ts
+**/*.ts
+**/*.map
+.gitignore
+node_modules/**
+!out/**
+!syntaxes/**
+!snippets/**
+!language-configuration.json
+!media/**
+*.vsix

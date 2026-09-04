@@ -1,0 +1,127 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "TraceQL",
+  "scopeName": "source.dtg-traceql",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#fields" },
+    { "include": "#severities" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.dtg-traceql",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.dtg-traceql",
+          "match": "(?i)\\b(FROM|WHERE|SELECT|LIMIT|AND|OR|NOT|GROUP|BY|ORDER|ASC|DESC|IN|BETWEEN|AS|GRAPH|START|TRAVERSE|DEPTH|RETURN)\\b"
+        },
+        {
+          "name": "support.type.source.dtg-traceql",
+          "match": "(?i)\\b(events|graph)\\b"
+        },
+        {
+          "name": "support.function.aggregate.dtg-traceql",
+          "match": "(?i)\\b(count|min|max|p50|p95)\\b"
+        }
+      ]
+    },
+    "fields": {
+      "patterns": [
+        {
+          "name": "variable.other.property.dtg-traceql",
+          "match": "\\b(domain|category|event_name|severity|correlation|event_sequence|monotonic_ns)\\b"
+        },
+        {
+          "name": "variable.other.property.payload.dtg-traceql",
+          "match": "\\bpayload\\b(?:\\.\\w+)?"
+        }
+      ]
+    },
+    "severities": {
+      "patterns": [
+        {
+          "name": "constant.language.severity.dtg-traceql",
+          "match": "\\b(trace|debug|info|warn|error|fatal)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.dtg-traceql",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.dtg-traceql",
+          "match": "(!=|<=|>=|=|<|>)"
+        },
+        {
+          "name": "keyword.operator.range.dtg-traceql",
+          "match": "\\.\\."
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.comma.dtg-traceql",
+          "match": ","
+        },
+        {
+          "name": "punctuation.definition.parameters.begin.dtg-traceql",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.definition.parameters.end.dtg-traceql",
+          "match": "\\)"
+        },
+        {
+          "name": "keyword.operator.wildcard.dtg-traceql",
+          "match": "\\*"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.dtg-traceql",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.dtg-traceql",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.dtg-traceql",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.dtg-traceql",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

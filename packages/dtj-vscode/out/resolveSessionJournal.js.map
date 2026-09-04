@@ -1,0 +1,1 @@
+{"version":3,"file":"resolveSessionJournal.js","sourceRoot":"","sources":["../src/resolveSessionJournal.ts"],"names":[],"mappings":";AAAA;;;GAGG;;AAEH,4CAGC;AAHD,SAAgB,gBAAgB,CAAC,aAAqB;IACpD,IAAI,CAAC,aAAa,CAAC,QAAQ,CAAC,UAAU,CAAC;QAAE,OAAO,IAAI,CAAC;IACrD,OAAO,GAAG,aAAa,CAAC,KAAK,CAAC,CAAC,EAAE,CAAC,UAAU,CAAC,MAAM,CAAC,MAAM,CAAC;AAC7D,CAAC"}

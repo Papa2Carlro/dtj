@@ -1,0 +1,158 @@
+{
+  "name": "dtj-vscode",
+  "displayName": "DTG DTJ Session Explorer",
+  "description": "Read-only VS Code explorer for plain .dtj sessions via Rust dtj ui-session protocol v1 (ADR 0021).",
+  "version": "0.1.4",
+  "publisher": "dochub",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onCustomEditor:dtg.sessionExplorer",
+    "onLanguage:dtg-traceql"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "dtg-traceql",
+        "aliases": [
+          "TraceQL",
+          "DTG TraceQL"
+        ],
+        "extensions": [
+          ".traceql"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./media/traceql.svg",
+          "dark": "./media/traceql.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dtg-traceql",
+        "scopeName": "source.dtg-traceql",
+        "path": "./syntaxes/dtg-traceql.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "dtg-traceql",
+        "path": "./snippets/dtg-traceql.json"
+      }
+    ],
+    "configurationDefaults": {
+      "files.associations": {
+        "*.traceql": "dtg-traceql"
+      },
+      "[dtg-traceql]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.wordBasedSuggestions": "off"
+      }
+    },
+    "customEditors": [
+      {
+        "viewType": "dtg.sessionExplorer",
+        "displayName": "DTJ Session Explorer",
+        "selector": [
+          {
+            "filenamePattern": "*.dtj"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "dtg.sessionExplorer.refresh",
+        "title": "DTJ Session Explorer: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dtg.traceql.run",
+        "title": "TraceQL: Run against .dtj",
+        "icon": "$(play)",
+        "category": "DTG"
+      },
+      {
+        "command": "dtg.traceql.runAgainst",
+        "title": "TraceQL: Run against other .dtj…",
+        "icon": "$(file-directory)",
+        "category": "DTG"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "dtg.traceql.run",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == dtg-traceql"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "dtg.sessionExplorer.refresh",
+          "when": "activeCustomEditorId == dtg.sessionExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "dtg.traceql.run",
+          "when": "resourceLangId == dtg-traceql",
+          "group": "navigation"
+        }
+      ],
+      "editor/title/run": [
+        {
+          "command": "dtg.traceql.run",
+          "when": "resourceLangId == dtg-traceql",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dtg.traceql.run",
+          "when": "resourceLangId == dtg-traceql",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dtg.traceql.runAgainst",
+          "when": "resourceLangId == dtg-traceql",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DTG Session Explorer",
+      "properties": {
+        "dtg.sessionExplorer.dtjBinaryPath": {
+          "type": "string",
+          "default": "/Users/maksympryimak/.cargo/bin/dtj",
+          "markdownDescription": "Absolute path to a prebuilt `dtj` binary. The extension never builds or downloads this binary. Example after `cargo build --manifest-path crates/dtj/Cargo.toml --release`: absolute path to `target/release/dtj`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "vitest run",
+    "typecheck": "tsc -p ./ --noEmit",
+    "check": "pnpm run typecheck && pnpm run test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.7"
+  }
+}
