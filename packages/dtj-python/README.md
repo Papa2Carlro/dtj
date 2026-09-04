@@ -5,11 +5,7 @@ Python middleware client for the local `dtj-agent` binary. The SDK never writes 
 ## Install
 
 ```bash
-# From local path (development)
-pip install -e /path/to/dtj/packages/dtj-python
-
-# Or from the dtj repo root
-pip install -e packages/dtj-python
+pip install dtj-sdk
 ```
 
 ### Development install of dtj-agent

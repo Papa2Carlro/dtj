@@ -15,7 +15,7 @@ and tested across all supported platforms.
 SDKs:
 
 - **Rust** — [dtj-sdk](https://crates.io/crates/dtj-sdk) v0.1.0 on crates.io
-- **Python** — source-available (locally tested)
+- **Python** — [dtj-sdk](https://pypi.org/project/dtj-sdk/) v0.1.0 on PyPI
 - **Go** — source-available (locally tested)
 - **TypeScript** — source-available (locally tested)
 
