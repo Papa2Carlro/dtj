@@ -1,0 +1,58 @@
+# Publish Python SDK to PyPI via Trusted Publishing (OIDC)
+#
+# Requirements:
+#   - PyPI Pending Publisher configured at https://pypi.org/manage/project/dtj-sdk/settings/publishing/
+#     with: Repository = Papa2Carlro/dtj, Workflow = publish-python.yml, Environment = pypi
+#   - GitHub Environment "pypi" created in the repository settings
+#   - No PyPI API tokens needed — OIDC handles authentication
+
+name: Publish Python SDK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+
+    environment:
+      name: pypi
+
+    permissions:
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine pytest pytest-asyncio
+
+      - name: Install SDK (editable)
+        run: |
+          python -m pip install -e packages/dtj-python
+
+      - name: Run tests
+        run: |
+          python -m pytest packages/dtj-python -v
+
+      - name: Build distributions
+        working-directory: packages/dtj-python
+        run: |
+          rm -rf build dist
+          python -m build
+
+      - name: Check distributions
+        run: |
+          python -m twine check packages/dtj-python/dist/*
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/dtj-python/dist/
