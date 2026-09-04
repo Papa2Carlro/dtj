@@ -300,7 +300,8 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          TARBALLS=(artifacts/*.tar.gz)
+          # With merge-multiple:false, each artifact lands in its own subdir.
+          TARBALLS=(artifacts/**/*.tar.gz)
           COUNT="${#TARBALLS[@]}"
           echo "found ${COUNT} tarball(s)"
           if [[ "${COUNT}" -ne 4 ]]; then
@@ -312,12 +313,13 @@ jobs:
           printf '%s\n' "${TARBALLS[@]}" | sort
 
       - name: Generate SHA256SUMS (deterministic order)
-        working-directory: artifacts
         run: |
           set -euo pipefail
-          # Sort filenames lexicographically for a stable checksum file.
-          sha256sum $(ls *.tar.gz | sort) > SHA256SUMS
+          # Collect all tarballs (may be in subdirs) and sort lexicographically.
+          TARBALLS=($(find artifacts -name '*.tar.gz' | sort))
+          sha256sum "${TARBALLS[@]}" > SHA256SUMS
           echo "---- SHA256SUMS ----"
+          cat SHA256SUMS
           cat SHA256SUMS
           echo "---- entries: $(wc -l < SHA256SUMS) ----"
 
@@ -344,12 +346,11 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          cd artifacts
-
-          # Use GitHub's auto-generated release notes; do not fabricate a
-          # changelog by hand in this workflow.
+          # With merge-multiple:false, each artifact is in a named subdir.
+          # Collect all tarballs (sorted) and SHA256SUMS for the release.
+          TARBALLS=($(find artifacts -name '*.tar.gz' | sort))
           gh release create "${TAG}" \
               --repo "${{ github.repository }}" \
               --title "DTJ v${VERSION}" \
               --generate-notes \
-              *.tar.gz SHA256SUMS
+              "${TARBALLS[@]}" SHA256SUMS
